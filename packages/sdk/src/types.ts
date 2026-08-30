@@ -30,10 +30,25 @@ export interface Bill { id: string; orderId: string; billNo: string; status: Bil
 export interface PaymentInput { mode: PaymentMode; amount: Money; reference?: string | null; idempotencyKey: string }
 export interface Payment { id: string; billId: string; mode: PaymentMode; status: PaymentStatus; amount: Money; reference?: string | null; createdAt: string }
 
-/** The contract the POS builds against. Real + mock implement it identically. */
+export interface CategoryInput { name: string; sortOrder?: number; isActive?: boolean }
+export interface ItemInput {
+  categoryId: string; name: string; basePrice: Money; taxRateBps?: number; isVeg?: boolean; isAvailable?: boolean; sku?: string | null; description?: string | null;
+  variants?: { id?: string; name: string; priceDelta: Money }[];
+  modifiers?: { id?: string; name: string; price: Money }[];
+}
+
+/** The contract the POS + dashboard build against. Real + mock implement it identically. */
 export interface PosApi {
   readonly mode: "mock" | "real" | "hybrid";
-  menu: { categories(): Promise<MenuCategory[]>; items(): Promise<MenuItem[]> };
+  menu: {
+    categories(): Promise<MenuCategory[]>; items(): Promise<MenuItem[]>;
+    createCategory(input: CategoryInput): Promise<MenuCategory>;
+    updateCategory(id: string, input: Partial<CategoryInput>): Promise<MenuCategory>;
+    deleteCategory(id: string): Promise<void>;
+    createItem(input: ItemInput): Promise<MenuItem>;
+    updateItem(id: string, input: Partial<ItemInput>): Promise<MenuItem>;
+    deleteItem(id: string): Promise<void>;
+  };
   tables: { list(): Promise<TableInfo[]> };
   orders: {
     create(input: OrderInput): Promise<Order>;

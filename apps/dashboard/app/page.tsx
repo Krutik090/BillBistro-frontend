@@ -1,26 +1,15 @@
 "use client";
 // Owner dashboard shell — per Figma "Hero / Dashboard". Static sample data, no business logic yet.
-import Link from "next/link";
-import { LayoutDashboard, Flame, UtensilsCrossed, Boxes, Users, Heart, BarChart3, Settings } from "lucide-react";
-import { AppShell, Button, Card, CardTitle, KpiTile, cn } from "@billbistro/ui";
+import { Button, Card, CardTitle, KpiTile, cn } from "@billbistro/ui";
+import { DashboardShell } from "../components/shell";
 
-const nav = [
-  { label: "Overview", href: "/", icon: <LayoutDashboard size={16} /> },
-  { label: "Live orders", href: "/orders", icon: <Flame size={16} /> },
-  { label: "Menu & pricing", href: "/menu", icon: <UtensilsCrossed size={16} /> },
-  { label: "Inventory", href: "/inventory", icon: <Boxes size={16} /> },
-  { label: "Staff", href: "/staff", icon: <Users size={16} /> },
-  { label: "Customers", href: "/customers", icon: <Heart size={16} /> },
-  { label: "Reports", href: "/reports", icon: <BarChart3 size={16} /> },
-  { label: "Settings", href: "/settings", icon: <Settings size={16} /> },
-];
 const hours = [12, 18, 30, 52, 70, 64, 40, 26, 22, 38, 74, 96, 88, 58];
 const top = [["Butter Chicken", 42, 100], ["Garlic Naan", 38, 90], ["Paneer Tikka", 27, 64], ["Veg Biryani", 21, 50], ["Sweet Lassi", 19, 45]] as const;
 const live = [["T4 · #1042", "Cooking", "text-warning"], ["T7 · #1043", "Served", "text-success"], ["Online · #1044", "New", "text-info"], ["T2 · #1045", "Bill requested", "text-primary"], ["T9 · #1046", "Cooking", "text-warning"]] as const;
 
 export default function DashboardPage() {
   return (
-    <AppShell app="Dashboard" tenant="Spice Route · Koramangala" nav={nav} activeHref="/" variant="sidebar" Link={Link}>
+    <DashboardShell>
       <div className="flex flex-col gap-5 p-7">
         <header className="flex items-center justify-between">
           <div>
@@ -68,6 +57,6 @@ export default function DashboardPage() {
         </Card>
         <div><Button variant="secondary">Export report</Button></div>
       </div>
-    </AppShell>
+    </DashboardShell>
   );
 }

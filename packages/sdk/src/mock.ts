@@ -1,6 +1,6 @@
 // In-memory typed mock of PosApi. Same money math contract as the API (int paise, GST bps).
 // Latency is simulated so optimistic UI paths are exercised.
-import type { Bill, BillInput, Kot, MenuCategory, MenuItem, Order, OrderInput, OrderItemInput, Payment, PaymentInput, PosApi, TableInfo } from "./types";
+import type { Bill, BillInput, ItemInput, Kot, MenuCategory, MenuItem, Order, OrderInput, OrderItemInput, Payment, PaymentInput, PosApi, TableInfo } from "./types";
 
 const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -54,7 +54,17 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
   const orders = new Map<string, Order>();
   const bills = new Map<string, Bill>();
   let orderSeq = 1041, kotSeq = 17, billSeq = 1041;
-  const itemById = new Map(MOCK_ITEMS.map((i) => [i.id, i]));
+  // Menu is mutable per api instance (menu management UI edits it).
+  const categories: MenuCategory[] = structuredClone(MOCK_CATEGORIES);
+  const menuItems: MenuItem[] = structuredClone(MOCK_ITEMS);
+  const itemById = new Map(menuItems.map((i) => [i.id, i]));
+  const applyItem = (target: MenuItem, input: Partial<ItemInput>) => {
+    const { variants, modifiers, ...rest } = input;
+    Object.assign(target, rest);
+    if (variants) target.variants = variants.map((v) => ({ id: v.id ?? uid(), itemId: target.id, name: v.name, priceDelta: v.priceDelta }));
+    if (modifiers) target.modifiers = modifiers.map((m) => ({ id: m.id ?? uid(), itemId: target.id, name: m.name, price: m.price }));
+    return target;
+  };
 
   const buildItems = (items: OrderItemInput[], existing: Order | null) =>
     items.map((input) => {
@@ -73,8 +83,18 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
   return {
     mode: "mock",
     menu: {
-      categories: async () => (await wait(latency), MOCK_CATEGORIES),
-      items: async () => (await wait(latency), MOCK_ITEMS),
+      categories: async () => (await wait(latency), structuredClone(categories.filter((c) => !("deleted" in c)))),
+      items: async () => (await wait(latency), structuredClone(menuItems)),
+      async createCategory(input) { await wait(latency); const c: MenuCategory = { id: uid(), name: input.name, sortOrder: input.sortOrder ?? categories.length + 1, isActive: input.isActive ?? true }; categories.push(c); return structuredClone(c); },
+      async updateCategory(id, input) { await wait(latency); const c = categories.find((x) => x.id === id); if (!c) throw new Error("Category not found"); Object.assign(c, input); return structuredClone(c); },
+      async deleteCategory(id) { await wait(latency); if (menuItems.some((i) => i.categoryId === id)) throw new Error("Move or delete its items first"); const i = categories.findIndex((x) => x.id === id); if (i >= 0) categories.splice(i, 1); },
+      async createItem(input) {
+        await wait(latency);
+        const it = applyItem({ id: uid(), categoryId: input.categoryId, name: input.name, basePrice: input.basePrice, taxRateBps: input.taxRateBps ?? 500, isVeg: input.isVeg ?? true, isAvailable: input.isAvailable ?? true, sku: input.sku ?? null, description: input.description ?? null, variants: [], modifiers: [] }, input);
+        menuItems.push(it); itemById.set(it.id, it); return structuredClone(it);
+      },
+      async updateItem(id, input) { await wait(latency); const it = itemById.get(id); if (!it) throw new Error("Item not found"); return structuredClone(applyItem(it, input)); },
+      async deleteItem(id) { await wait(latency); const i = menuItems.findIndex((x) => x.id === id); if (i >= 0) menuItems.splice(i, 1); itemById.delete(id); },
     },
     tables: { list: async () => (await wait(latency), MOCK_TABLES.map((t) => ({ ...t }))) },
     orders: {

@@ -12,6 +12,13 @@ export function createRealApi(client: ApiClient = createClient()): PosApi {
     menu: {
       categories: () => client.request("/menu/categories"),
       items: () => client.request("/menu/items"),
+      createCategory: (input) => client.request("/menu/categories", { method: "POST", body: JSON.stringify(input) }),
+      updateCategory: notYet("PATCH /menu/categories/:id (T-100)"),
+      deleteCategory: notYet("DELETE /menu/categories/:id (T-100)"),
+      // POST /menu/items accepts {categoryId,name,basePrice,taxRateBps?,isVeg?,sku?} today; variants/modifiers need Jim's nested create.
+      createItem: ({ variants, modifiers, ...body }) => client.request("/menu/items", { method: "POST", body: JSON.stringify(body) }),
+      updateItem: notYet("PATCH /menu/items/:id (T-100)"),
+      deleteItem: notYet("DELETE /menu/items/:id (T-100)"),
     },
     tables: { list: notYet("tables API (T-101)") },
     orders: {
