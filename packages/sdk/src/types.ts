@@ -1,14 +1,20 @@
-// Domain types mirroring prisma/schema.prisma + apps/api response shapes. Money = integer paise.
+// Domain types mirroring prisma/schema.prisma + apps/api (phase1-backend) response shapes. Money = integer paise.
 export type Money = number;
 
-export interface MenuCategory { id: string; name: string; sortOrder: number; isActive: boolean }
-export interface MenuVariant { id: string; itemId: string; name: string; priceDelta: Money }
-export interface MenuModifier { id: string; itemId: string; name: string; price: Money }
+export interface MenuCategory { id: string; name: string; description?: string | null; sortOrder: number; isActive: boolean; scheduleId?: string | null }
+export interface MenuVariant { id: string; itemId?: string; name: string; priceDelta: Money; isDefault?: boolean; isAvailable?: boolean; sortOrder?: number }
+export interface ModifierOption { id: string; groupId?: string; name: string; price: Money; isDefault?: boolean; isAvailable?: boolean; sortOrder?: number }
+export interface ModifierGroup { id: string; name: string; minSelect: number; maxSelect: number; options: ModifierOption[] }
 export interface MenuItem {
   id: string; categoryId: string; sku?: string | null; name: string; description?: string | null;
-  basePrice: Money; taxRateBps: number; isVeg: boolean; isAvailable: boolean;
-  variants: MenuVariant[]; modifiers: MenuModifier[];
+  basePrice: Money; effectivePrice?: Money; taxRateBps: number; hsnCode?: string | null; isVeg: boolean; isAvailable: boolean; station?: string | null; sortOrder?: number;
+  variants: MenuVariant[]; modifierGroups: ModifierGroup[];
 }
+/** Price the POS charges before variants/options (outlet override applied by the API when present). */
+export const itemPrice = (i: MenuItem) => i.effectivePrice ?? i.basePrice;
+export const allOptions = (i: MenuItem) => i.modifierGroups.flatMap((g) => g.options);
+
+export interface EffectiveMenu { outlet: { id: string; code: string; name: string }; generatedAt: string; categories: (MenuCategory & { items: MenuItem[] })[]; combos: unknown[] }
 
 export type OrderType = "DINE_IN" | "TAKEAWAY" | "DELIVERY";
 export type OrderStatus = "OPEN" | "BILLED" | "SETTLED" | "CANCELLED";
@@ -19,6 +25,7 @@ export type PaymentStatus = "PENDING" | "CAPTURED" | "FAILED" | "REFUNDED";
 
 export interface TableInfo { id: string; section: string; name: string; seats: number; status: "FREE" | "OCCUPIED" | "BILLED"; orderId?: string | null }
 
+/** modifierIds = ModifierOption ids (across groups). */
 export interface OrderItemInput { itemId: string; qty: number; variantId?: string | null; modifierIds?: string[]; notes?: string | null; clientLineId?: string }
 export interface OrderInput { type: OrderType; tableRef?: string | null; items: OrderItemInput[]; clientKey?: string }
 export interface OrderItem { id: string; itemId: string; name: string; variantName?: string | null; qty: number; unitPrice: Money; taxRateBps: number; lineTotal: Money; notes?: string | null; kotId?: string | null }
@@ -30,16 +37,21 @@ export interface Bill { id: string; orderId: string; billNo: string; status: Bil
 export interface PaymentInput { mode: PaymentMode; amount: Money; reference?: string | null; idempotencyKey: string }
 export interface Payment { id: string; billId: string; mode: PaymentMode; status: PaymentStatus; amount: Money; reference?: string | null; createdAt: string }
 
-export interface CategoryInput { name: string; sortOrder?: number; isActive?: boolean }
+export interface CategoryInput { name: string; description?: string; sortOrder?: number; isActive?: boolean }
 export interface ItemInput {
-  categoryId: string; name: string; basePrice: Money; taxRateBps?: number; isVeg?: boolean; isAvailable?: boolean; sku?: string | null; description?: string | null;
-  variants?: { id?: string; name: string; priceDelta: Money }[];
+  categoryId: string; name: string; basePrice: Money; taxRateBps?: number; isVeg?: boolean; isAvailable?: boolean; sku?: string | null; description?: string | null; station?: string | null;
+  variants?: { id?: string; name: string; priceDelta: Money; isDefault?: boolean }[];
+  /** Simple add-ons: options of the item's default "Add-ons" group (min 0 / max all). Full group editing is a later phase. */
   modifiers?: { id?: string; name: string; price: Money }[];
 }
+
+export interface LoginInput { tenantSlug: string; email: string; password: string }
+export interface Principal { userId: string; tenantId: string; roles: string[]; permissions: string[] }
 
 /** The contract the POS + dashboard build against. Real + mock implement it identically. */
 export interface PosApi {
   readonly mode: "mock" | "real" | "hybrid";
+  auth: { login(input: LoginInput): Promise<Principal>; me(): Promise<Principal>; logout(): Promise<void> };
   menu: {
     categories(): Promise<MenuCategory[]>; items(): Promise<MenuItem[]>;
     createCategory(input: CategoryInput): Promise<MenuCategory>;

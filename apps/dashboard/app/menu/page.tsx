@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Plus, Leaf, Drumstick, Pencil, Trash2, Search } from "lucide-react";
 import { Badge, Button, Table, THead, TBody, TR, TH, TD, cn } from "@billbistro/ui";
-import type { MenuCategory, MenuItem } from "@billbistro/sdk";
+import { allOptions, type MenuCategory, type MenuItem } from "@billbistro/sdk";
 import { DashboardShell } from "../../components/shell";
 import { useMenu, useMenuMutations } from "../../lib/api";
 import { ItemEditor } from "../../components/item-editor";
@@ -61,7 +61,7 @@ function MenuManager() {
                 <TD numeric>{inr(i.basePrice)}</TD>
                 <TD className="text-muted">{i.taxRateBps / 100}%</TD>
                 <TD className="text-muted">{i.variants.length ? i.variants.map((v) => `${v.name} ${v.priceDelta ? (v.priceDelta > 0 ? "+" : "") + inr(v.priceDelta) : ""}`.trim()).join(", ") : "—"}</TD>
-                <TD className="text-muted">{i.modifiers.length ? i.modifiers.map((x) => x.name).join(", ") : "—"}</TD>
+                <TD className="text-muted">{allOptions(i).length ? allOptions(i).map((x) => x.name).join(", ") : "—"}</TD>
                 <TD><button onClick={() => run(m.updateItem.mutateAsync({ id: i.id, input: { isAvailable: !i.isAvailable } }), i.isAvailable ? "Marked sold out" : "Available")}><Badge tone={i.isAvailable ? "success-soft" : "danger-soft"}>{i.isAvailable ? "In stock" : "Sold out"}</Badge></button></TD>
                 <TD><div className="flex justify-end gap-1"><IconBtn title="Edit" onClick={() => setEditing(i)}><Pencil size={14} /></IconBtn><IconBtn title="Delete" onClick={() => window.confirm(`Delete ${i.name}?`) && run(m.deleteItem.mutateAsync(i.id), "Deleted")}><Trash2 size={14} /></IconBtn></div></TD>
               </TR>

@@ -2,7 +2,7 @@
 import * as React from "react";
 import { Plus, X } from "lucide-react";
 import { Button, Drawer, Input, cn } from "@billbistro/ui";
-import type { ItemInput, MenuCategory, MenuItem } from "@billbistro/sdk";
+import { allOptions, type ItemInput, type MenuCategory, type MenuItem } from "@billbistro/sdk";
 
 interface Props { open: boolean; item: MenuItem | null; categories: MenuCategory[]; defaultCategoryId?: string; onClose: () => void; onSave: (input: ItemInput) => Promise<void> }
 type Row = { id?: string; name: string; rupees: string };
@@ -21,7 +21,7 @@ export function ItemEditor({ open, item, categories, defaultCategoryId, onClose,
     setName(item?.name ?? ""); setSku(item?.sku ?? ""); setDesc(item?.description ?? ""); setCategoryId(item?.categoryId ?? defaultCategoryId ?? "");
     setPrice(item ? String(item.basePrice / 100) : ""); setTax(item ? item.taxRateBps / 100 : 5); setVeg(item?.isVeg ?? true); setAvail(item?.isAvailable ?? true);
     setVariants(item?.variants.map((v) => ({ id: v.id, name: v.name, rupees: String(v.priceDelta / 100) })) ?? []);
-    setMods(item?.modifiers.map((m) => ({ id: m.id, name: m.name, rupees: String(m.price / 100) })) ?? []);
+    setMods(item ? allOptions(item).map((m) => ({ id: m.id, name: m.name, rupees: String(m.price / 100) })) : []);
     setErr(null);
   }, [open, item, defaultCategoryId]);
 

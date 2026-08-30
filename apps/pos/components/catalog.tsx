@@ -3,7 +3,7 @@ import * as React from "react";
 import { motion } from "framer-motion";
 import { Search, Leaf, Drumstick } from "lucide-react";
 import { cn, spring } from "@billbistro/ui";
-import type { MenuItem } from "@billbistro/sdk";
+import { itemPrice, type MenuItem } from "@billbistro/sdk";
 import { useMenu } from "../lib/api";
 import { usePos } from "../lib/store";
 import { inr } from "../lib/format";
@@ -22,7 +22,7 @@ export function Catalog({ searchRef }: { searchRef: React.RefObject<HTMLInputEle
 
   const pick = (item: MenuItem) => {
     // One tap adds when the item has no choices; otherwise open the variant/modifier sheet.
-    if (item.variants.length === 0 && item.modifiers.length === 0) addLine(item, null, [], 1);
+    if (item.variants.length === 0 && item.modifierGroups.length === 0) addLine(item, null, [], 1);
     else openSheet("item", item);
   };
 
@@ -56,8 +56,8 @@ export function Catalog({ searchRef }: { searchRef: React.RefObject<HTMLInputEle
               {item.isVeg ? <Leaf size={14} className="mt-1 shrink-0 text-success" /> : <Drumstick size={14} className="mt-1 shrink-0 text-danger" />}
             </div>
             <span className="mt-auto flex items-center justify-between">
-              <span className="font-mono text-md font-medium text-primary">{inr(item.basePrice)}</span>
-              {(item.variants.length > 0 || item.modifiers.length > 0) && <span className="text-[11px] font-medium text-subtle">{item.variants.length ? `${item.variants.length} sizes` : "add-ons"}</span>}
+              <span className="font-mono text-md font-medium text-primary">{inr(itemPrice(item))}</span>
+              {(item.variants.length > 0 || item.modifierGroups.length > 0) && <span className="text-[11px] font-medium text-subtle">{item.variants.length ? `${item.variants.length} sizes` : "add-ons"}</span>}
             </span>
           </motion.button>
         ))}

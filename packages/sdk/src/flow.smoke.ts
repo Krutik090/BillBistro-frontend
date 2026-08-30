@@ -1,5 +1,5 @@
 // Smoke: end-to-end POS flow on the mock API. Run: pnpm --filter @billbistro/sdk smoke
-import { createMockApi, priceLine } from "./index";
+import { createMockApi, priceLine, allOptions } from "./index";
 
 const api = createMockApi({ latencyMs: 0 });
 const assert = (c: unknown, m: string) => { if (!c) throw new Error(`FAIL ${m}`); };
@@ -10,7 +10,7 @@ const naan = items.find((i) => i.id === "i-garlic-naan")!;
 const lassi = items.find((i) => i.id === "i-sweet-lassi")!;
 
 // pricing: Butter Chicken Half (-160) + Extra gravy (+40) = 300
-const half = bc.variants.find((v) => v.name === "Half")!.id, gravy = bc.modifiers.find((m) => m.name === "Extra gravy")!.id;
+const half = bc.variants.find((v) => v.name === "Half")!.id, gravy = allOptions(bc).find((m) => m.name === "Extra gravy")!.id;
 assert(priceLine(bc, { itemId: bc.id, qty: 2, variantId: half, modifierIds: [gravy] }).lineTotal === 60000, "variant+modifier pricing");
 
 const order = await api.orders.create({ type: "DINE_IN", tableRef: "T4", items: [
@@ -19,8 +19,7 @@ const order = await api.orders.create({ type: "DINE_IN", tableRef: "T4", items: 
   { itemId: lassi.id, qty: 2, variantId: lassi.variants.find((v) => v.name === "Large")!.id, clientLineId: "L3" },
 ] });
 assert(order.subtotal === 60000 + 21000 + 32000, `subtotal ${order.subtotal}`);
-// tax: 5% on 81000 = 4050, 18% on 32000 = 5760
-assert(order.taxTotal === 4050 + 5760, `tax ${order.taxTotal}`);
+assert(order.taxTotal === 4050 + 5760, `tax ${order.taxTotal}`); // 5% on 81000, 18% on 32000
 assert(order.items.every((i) => ["L1", "L2", "L3"].includes(i.id)), "server echoes clientLineId");
 
 const kot = await api.orders.sendKot(order.id, ["L1", "L2"]);
@@ -29,6 +28,10 @@ assert(o2.items.filter((i) => i.kotId === kot.id).length === 2 && !o2.items[2].k
 
 const o3 = await api.orders.replaceItems(order.id, [...o2.items.map((i) => ({ itemId: i.itemId, qty: i.qty, clientLineId: i.id, variantId: i.id === "L1" ? half : i.id === "L3" ? lassi.variants[1].id : null, modifierIds: i.id === "L1" ? [gravy] : [] })), { itemId: naan.id, qty: 1, clientLineId: "L4" }]);
 assert(o3.items.find((i) => i.id === "L1")!.kotId === kot.id, "KOT survives replaceItems");
+
+// menu admin: edit item add-ons + variants, then price with the new option
+const edited = await api.menu.updateItem(naan.id, { modifiers: [{ id: allOptions(naan)[0].id, name: "Extra butter", price: 1500 }, { name: "Garlic overload", price: 2000 }], variants: [{ name: "Double", priceDelta: 5000 }] });
+assert(allOptions(edited).length === 2 && edited.modifierGroups[0].maxSelect === 2 && edited.variants.length === 1, "menu admin diff applied");
 
 // 10% discount + ₹50 tip → bill, split 2 ways
 const bill1 = await api.billing.create({ orderId: order.id, discount: Math.round(o3.subtotal * 0.1), tip: 5000, splitOf: { index: 0, count: 2 } });

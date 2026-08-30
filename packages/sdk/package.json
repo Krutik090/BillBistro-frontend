@@ -8,6 +8,7 @@
     "build": "echo \"(source package — consumed via workspace transpile)\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "smoke": "tsx src/flow.smoke.ts",
+    "smoke:real": "tsx src/real.smoke.ts",
     "test": "tsx src/flow.smoke.ts"
   },
   "dependencies": { "@billbistro/types": "workspace:*" },

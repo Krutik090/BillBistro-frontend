@@ -1,30 +1,83 @@
-// Real PosApi over Jim's NestJS API. Endpoints that don't exist yet throw NotImplemented so the
-// hybrid mode can route them to the mock until T-102/T-103 land.
-import type { PosApi } from "./types";
+// Real PosApi over Jim's NestJS API (phase1-backend, /v1). Endpoints that don't exist yet throw
+// NotImplementedError so hybrid mode can route them to the mock until T-101/T-102/T-103 land.
+import type { MenuCategory, MenuItem, ModifierGroup, PosApi, EffectiveMenu, ItemInput, Principal } from "./types";
 import { createClient, type ApiClient } from "./client";
 
 export class NotImplementedError extends Error { constructor(what: string) { super(`${what} is not available on the API yet`); } }
 
-export function createRealApi(client: ApiClient = createClient()): PosApi {
+export interface RealApiOptions { client?: ApiClient; /** When set, POS reads GET /menu/outlets/:id/effective (schedules + outlet prices applied). */ outletId?: string | null }
+
+const ADDONS = "Add-ons";
+
+export function createRealApi(opts: RealApiOptions = {}): PosApi {
+  const c = opts.client ?? createClient();
+  const outletId = opts.outletId ?? (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_OUTLET_ID : undefined) ?? null;
   const notYet = (what: string) => async () => { throw new NotImplementedError(what); };
+
+  const getItem = (id: string) => c.get<MenuItem>(`/menu/items/${id}${outletId ? `?outletId=${outletId}` : ""}`);
+
+  /** Diff-sync variants + the item's "Add-ons" modifier group against the flat editor input. */
+  async function syncNested(id: string, input: Partial<ItemInput>) {
+    const cur = await getItem(id);
+    if (input.variants) {
+      const keep = new Set(input.variants.filter((v) => v.id).map((v) => v.id));
+      for (const v of cur.variants) if (!keep.has(v.id)) await c.del(`/menu/variants/${v.id}`);
+      for (const v of input.variants) {
+        const body = { name: v.name, priceDelta: v.priceDelta, isDefault: v.isDefault };
+        if (v.id) { const prev = cur.variants.find((x) => x.id === v.id); if (!prev || prev.name !== v.name || prev.priceDelta !== v.priceDelta || (v.isDefault !== undefined && prev.isDefault !== v.isDefault)) await c.patch(`/menu/variants/${v.id}`, body); }
+        else await c.post(`/menu/items/${id}/variants`, body);
+      }
+    }
+    if (input.modifiers) {
+      let group: ModifierGroup | undefined = cur.modifierGroups.find((g) => g.name === ADDONS) ?? cur.modifierGroups[0];
+      if (input.modifiers.length && !group) {
+        group = await c.post<ModifierGroup>("/menu/modifier-groups", { name: ADDONS, minSelect: 0, maxSelect: Math.max(1, input.modifiers.length) });
+        group.options = [];
+        await c.put(`/menu/items/${id}/modifier-groups`, { groupIds: [...cur.modifierGroups.map((g) => g.id), group.id] });
+      }
+      if (group) {
+        const keep = new Set(input.modifiers.filter((m) => m.id).map((m) => m.id));
+        for (const o of group.options) if (!keep.has(o.id)) await c.del(`/menu/modifier-options/${o.id}`);
+        for (const m of input.modifiers) {
+          if (m.id) { const prev = group.options.find((x) => x.id === m.id); if (!prev || prev.name !== m.name || prev.price !== m.price) await c.patch(`/menu/modifier-options/${m.id}`, { name: m.name, price: m.price }); }
+          else await c.post(`/menu/modifier-groups/${group.id}/options`, { name: m.name, price: m.price });
+        }
+        if (input.modifiers.length > group.maxSelect) await c.patch(`/menu/modifier-groups/${group.id}`, { maxSelect: input.modifiers.length });
+      }
+    }
+    return getItem(id);
+  }
+  const scalars = ({ variants, modifiers, sku, description, station, ...rest }: Partial<ItemInput>) => ({ ...rest, sku: sku ?? undefined, description: description ?? undefined, station: station ?? undefined });
+
   return {
     mode: "real",
+    auth: {
+      login: async (input) => (await c.post<{ user: Principal }>("/auth/login", input)).user,
+      me: () => c.get("/auth/me"),
+      logout: async () => { await c.post("/auth/logout"); },
+    },
     menu: {
-      categories: () => client.request("/menu/categories"),
-      items: () => client.request("/menu/items"),
-      createCategory: (input) => client.request("/menu/categories", { method: "POST", body: JSON.stringify(input) }),
-      updateCategory: notYet("PATCH /menu/categories/:id (T-100)"),
-      deleteCategory: notYet("DELETE /menu/categories/:id (T-100)"),
-      // POST /menu/items accepts {categoryId,name,basePrice,taxRateBps?,isVeg?,sku?} today; variants/modifiers need Jim's nested create.
-      createItem: ({ variants, modifiers, ...body }) => client.request("/menu/items", { method: "POST", body: JSON.stringify(body) }),
-      updateItem: notYet("PATCH /menu/items/:id (T-100)"),
-      deleteItem: notYet("DELETE /menu/items/:id (T-100)"),
+      categories: () => c.get<MenuCategory[]>("/menu/categories?includeInactive=true"),
+      items: async () => {
+        if (outletId) { const eff = await c.get<EffectiveMenu>(`/menu/outlets/${outletId}/effective`); return eff.categories.flatMap((cat) => cat.items); }
+        return c.get<MenuItem[]>("/menu/items?includeUnavailable=true");
+      },
+      createCategory: (input) => c.post("/menu/categories", input),
+      updateCategory: (id, input) => c.patch(`/menu/categories/${id}`, input),
+      deleteCategory: async (id) => { await c.del(`/menu/categories/${id}`); },
+      // POST /menu/items accepts nested variants[] + inline modifiers[] (Jim 4059c8b) — one round-trip.
+      createItem: async (input) => {
+        const created = await c.post<MenuItem>("/menu/items", { ...scalars(input), variants: input.variants?.map(({ id: _i, ...v }) => v), modifiers: input.modifiers?.map(({ id: _i, ...m }) => m) });
+        return getItem(created.id);
+      },
+      updateItem: async (id, input) => { const s = scalars(input); if (Object.keys(s).length) await c.patch(`/menu/items/${id}`, s); return syncNested(id, input); },
+      deleteItem: async (id) => { await c.del(`/menu/items/${id}`); },
     },
     tables: { list: notYet("tables API (T-101)") },
     orders: {
       // POST /orders exists (T-102 in progress) — body shape to be confirmed with Jim's CreateOrder zod schema.
-      create: (input) => client.request("/orders", { method: "POST", body: JSON.stringify(input) }),
-      get: (id) => client.request(`/orders/${id}`),
+      create: (input) => c.post("/orders", input),
+      get: (id) => c.get(`/orders/${id}`),
       replaceItems: notYet("PATCH /orders/:id/items (T-102)"),
       sendKot: notYet("POST /orders/:id/kots (T-102)"),
     },

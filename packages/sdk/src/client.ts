@@ -1,45 +1,46 @@
-// @billbistro/sdk — typed API client stub. Phase 0: only /health. Later phases add
-// generated endpoints from the NestJS OpenAPI spec and share Zod schemas via @billbistro/types.
+// @billbistro/sdk low-level HTTP client for the NestJS API (phase1-backend).
+// All routes live under /v1 except /health. Auth = httpOnly cookies (credentials: include).
 
-export interface HealthResponse {
-  status: "ok" | string;
-  version?: string;
-  uptime?: number;
-  [k: string]: unknown;
-}
+export interface HealthResponse { status: "ok" | string; db?: "up" | "down"; version?: string; time?: string; [k: string]: unknown }
 
+/** Shared API error shape: {statusCode, error, message, requestId, path, issues?[]} */
 export class ApiError extends Error {
   constructor(public status: number, public body: unknown, message?: string) {
-    super(message ?? `API error ${status}`);
+    super(message ?? (typeof body === "object" && body && "message" in body ? String((body as { message: unknown }).message) : `API error ${status}`));
   }
+  get issues() { return (this.body as { issues?: unknown[] } | null)?.issues ?? []; }
 }
 
 export interface ClientOptions {
+  /** API origin, e.g. http://localhost:4000 (no /v1). */
   baseUrl?: string;
-  /** Tenant slug/ID sent as x-tenant-id (auth cookie carries the real scope). */
-  tenantId?: string;
   fetch?: typeof fetch;
 }
 
 export function createClient(opts: ClientOptions = {}) {
-  const baseUrl = (opts.baseUrl ?? (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_API_URL : undefined) ?? "http://localhost:4000").replace(/\/$/, "");
-  const f = opts.fetch ?? fetch;
+  const origin = (opts.baseUrl ?? (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_API_URL : undefined) ?? "http://localhost:4000").replace(/\/$/, "");
+  const f = opts.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
 
-  async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const res = await f(`${baseUrl}${path}`, {
-      credentials: "include",
-      ...init,
-      headers: { "content-type": "application/json", ...(opts.tenantId ? { "x-tenant-id": opts.tenantId } : {}), ...(init.headers ?? {}) },
-    });
-    const body = res.headers.get("content-type")?.includes("json") ? await res.json() : await res.text();
+  async function raw<T>(url: string, init: RequestInit = {}): Promise<T> {
+    const res = await f(url, { credentials: "include", ...init, headers: { ...(init.body ? { "content-type": "application/json" } : {}), ...(init.headers ?? {}) } });
+    const text = await res.text();
+    const body = text && res.headers.get("content-type")?.includes("json") ? JSON.parse(text) : text;
     if (!res.ok) throw new ApiError(res.status, body);
     return body as T;
   }
+  /** Request against /v1. */
+  const request = <T,>(path: string, init: RequestInit = {}) => raw<T>(`${origin}/v1${path}`, init);
+  const json = (method: string, body?: unknown): RequestInit => ({ method, body: body === undefined ? undefined : JSON.stringify(body) });
 
   return {
-    baseUrl,
-    health: () => request<HealthResponse>("/health"),
+    origin,
+    health: () => raw<HealthResponse>(`${origin}/health`),
     request,
+    get: <T,>(p: string) => request<T>(p),
+    post: <T,>(p: string, b?: unknown) => request<T>(p, json("POST", b)),
+    patch: <T,>(p: string, b?: unknown) => request<T>(p, json("PATCH", b)),
+    put: <T,>(p: string, b?: unknown) => request<T>(p, json("PUT", b)),
+    del: <T,>(p: string) => request<T>(p, { method: "DELETE" }),
   };
 }
 

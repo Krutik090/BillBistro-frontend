@@ -1,11 +1,12 @@
 // Pure cart math (int paise). Mirrors the API contract: GST per line by taxRateBps, split CGST/SGST, round-off to the rupee.
 import type { MenuItem } from "@billbistro/sdk";
-import { priceLine } from "@billbistro/sdk";
+import { priceLine, allOptions } from "@billbistro/sdk";
 
 export interface CartLine {
   lineId: string;
   item: MenuItem;
   variantId: string | null;
+  /** ModifierOption ids */
   modifierIds: string[];
   qty: number;
   notes: string | null;
@@ -19,7 +20,7 @@ export const lineUnit = (l: CartLine) => priceLine(l.item, { itemId: l.item.id, 
 export const lineTotal = (l: CartLine) => lineUnit(l) * l.qty;
 export const lineLabel = (l: CartLine) => {
   const v = l.item.variants.find((x) => x.id === l.variantId)?.name;
-  const m = l.item.modifiers.filter((x) => l.modifierIds.includes(x.id)).map((x) => x.name);
+  const m = allOptions(l.item).filter((x) => l.modifierIds.includes(x.id)).map((x) => x.name);
   return [v, ...m].filter(Boolean).join(" · ");
 };
 

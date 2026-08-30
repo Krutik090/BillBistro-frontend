@@ -1,6 +1,7 @@
 // In-memory typed mock of PosApi. Same money math contract as the API (int paise, GST bps).
 // Latency is simulated so optimistic UI paths are exercised.
-import type { Bill, BillInput, ItemInput, Kot, MenuCategory, MenuItem, Order, OrderInput, OrderItemInput, Payment, PaymentInput, PosApi, TableInfo } from "./types";
+import type { Bill, BillInput, ItemInput, Kot, MenuCategory, MenuItem, Order, OrderInput, OrderItemInput, Payment, PaymentInput, PosApi, Principal, TableInfo } from "./types";
+import { allOptions, itemPrice } from "./types";
 
 const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -9,7 +10,7 @@ const now = () => new Date().toISOString();
 const cat = (id: string, name: string, sortOrder: number): MenuCategory => ({ id, name, sortOrder, isActive: true });
 export const MOCK_CATEGORIES: MenuCategory[] = [cat("c-starters", "Starters", 1), cat("c-mains", "Mains", 2), cat("c-breads", "Breads", 3), cat("c-rice", "Rice", 4), cat("c-drinks", "Drinks", 5), cat("c-desserts", "Desserts", 6)];
 
-type ItemSeed = [id: string, cat: string, name: string, rupees: number, veg: boolean, variants?: [string, number][], modifiers?: [string, number][]];
+type ItemSeed = [id: string, cat: string, name: string, rupees: number, veg: boolean, variants?: [string, number][], addons?: [string, number][]];
 const seeds: ItemSeed[] = [
   ["i-paneer-tikka", "c-starters", "Paneer Tikka", 320, true, [["Half", -120], ["Full", 0]], [["Extra mint chutney", 20], ["Extra spicy", 0]]],
   ["i-chicken-65", "c-starters", "Chicken 65", 360, false, [["Half", -140], ["Full", 0]], [["Extra spicy", 0]]],
@@ -27,10 +28,10 @@ const seeds: ItemSeed[] = [
   ["i-gulab-jamun", "c-desserts", "Gulab Jamun", 140, true, [], [["Extra piece", 50]]],
   ["i-kulfi", "c-desserts", "Kulfi", 110, true],
 ];
-export const MOCK_ITEMS: MenuItem[] = seeds.map(([id, categoryId, name, rupees, isVeg, variants = [], modifiers = []]) => ({
+export const MOCK_ITEMS: MenuItem[] = seeds.map(([id, categoryId, name, rupees, isVeg, variants = [], addons = []]) => ({
   id, categoryId, name, sku: id.toUpperCase(), description: null, basePrice: rupees * 100, taxRateBps: categoryId === "c-drinks" ? 1800 : 500, isVeg, isAvailable: true,
-  variants: variants.map(([vn, d]) => ({ id: `${id}:v:${vn}`, itemId: id, name: vn, priceDelta: d * 100 })),
-  modifiers: modifiers.map(([mn, p]) => ({ id: `${id}:m:${mn}`, itemId: id, name: mn, price: p * 100 })),
+  variants: variants.map(([vn, d]) => ({ id: `${id}:v:${vn}`, itemId: id, name: vn, priceDelta: d * 100, isDefault: d === 0 })),
+  modifierGroups: addons.length ? [{ id: `${id}:g`, name: "Add-ons", minSelect: 0, maxSelect: addons.length, options: addons.map(([mn, p]) => ({ id: `${id}:m:${mn}`, groupId: `${id}:g`, name: mn, price: p * 100 })) }] : [],
 }));
 
 const table = (id: string, section: string, name: string, seats: number, status: TableInfo["status"] = "FREE"): TableInfo => ({ id, section, name, seats, status });
@@ -39,13 +40,14 @@ export const MOCK_TABLES: TableInfo[] = [
   table("t5", "Main hall", "T5", 6, "BILLED"), table("t6", "Main hall", "T6", 2), table("t7", "Rooftop", "R1", 4, "OCCUPIED"), table("t8", "Rooftop", "R2", 4),
   table("t9", "Rooftop", "R3", 8), table("t10", "AC room", "A1", 4), table("t11", "AC room", "A2", 6), table("t12", "AC room", "A3", 2),
 ];
+const MOCK_PRINCIPAL: Principal = { userId: "mock-user", tenantId: "mock-tenant", roles: ["owner"], permissions: ["menu.read", "menu.write", "orders.write", "bills.write", "payments.write"] };
 
-/** Pure pricing — shared contract with the API (T-102): unit = base + variant + modifiers; tax per line, half CGST/half SGST. */
+/** Pure pricing — shared contract with the API (T-102): unit = price + variant + options; tax per line, half CGST/half SGST. */
 export function priceLine(item: MenuItem, input: OrderItemInput) {
   const variant = item.variants.find((v) => v.id === input.variantId);
-  const mods = item.modifiers.filter((m) => input.modifierIds?.includes(m.id));
-  const unitPrice = item.basePrice + (variant?.priceDelta ?? 0) + mods.reduce((s, m) => s + m.price, 0);
-  const name = mods.length ? `${item.name} (+${mods.map((m) => m.name).join(", ")})` : item.name;
+  const opts = allOptions(item).filter((o) => input.modifierIds?.includes(o.id));
+  const unitPrice = itemPrice(item) + (variant?.priceDelta ?? 0) + opts.reduce((s, o) => s + o.price, 0);
+  const name = opts.length ? `${item.name} (+${opts.map((o) => o.name).join(", ")})` : item.name;
   return { unitPrice, lineTotal: unitPrice * input.qty, variantName: variant?.name ?? null, name, taxRateBps: item.taxRateBps };
 }
 
@@ -61,8 +63,11 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
   const applyItem = (target: MenuItem, input: Partial<ItemInput>) => {
     const { variants, modifiers, ...rest } = input;
     Object.assign(target, rest);
-    if (variants) target.variants = variants.map((v) => ({ id: v.id ?? uid(), itemId: target.id, name: v.name, priceDelta: v.priceDelta }));
-    if (modifiers) target.modifiers = modifiers.map((m) => ({ id: m.id ?? uid(), itemId: target.id, name: m.name, price: m.price }));
+    if (variants) target.variants = variants.map((v) => ({ id: v.id ?? uid(), itemId: target.id, name: v.name, priceDelta: v.priceDelta, isDefault: v.isDefault }));
+    if (modifiers) {
+      const gid = target.modifierGroups[0]?.id ?? uid();
+      target.modifierGroups = modifiers.length ? [{ id: gid, name: "Add-ons", minSelect: 0, maxSelect: modifiers.length, options: modifiers.map((m) => ({ id: m.id ?? uid(), groupId: gid, name: m.name, price: m.price })) }] : [];
+    }
     return target;
   };
 
@@ -82,15 +87,16 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
 
   return {
     mode: "mock",
+    auth: { login: async () => (await wait(latency), MOCK_PRINCIPAL), me: async () => MOCK_PRINCIPAL, logout: async () => {} },
     menu: {
-      categories: async () => (await wait(latency), structuredClone(categories.filter((c) => !("deleted" in c)))),
+      categories: async () => (await wait(latency), structuredClone(categories)),
       items: async () => (await wait(latency), structuredClone(menuItems)),
       async createCategory(input) { await wait(latency); const c: MenuCategory = { id: uid(), name: input.name, sortOrder: input.sortOrder ?? categories.length + 1, isActive: input.isActive ?? true }; categories.push(c); return structuredClone(c); },
       async updateCategory(id, input) { await wait(latency); const c = categories.find((x) => x.id === id); if (!c) throw new Error("Category not found"); Object.assign(c, input); return structuredClone(c); },
       async deleteCategory(id) { await wait(latency); if (menuItems.some((i) => i.categoryId === id)) throw new Error("Move or delete its items first"); const i = categories.findIndex((x) => x.id === id); if (i >= 0) categories.splice(i, 1); },
       async createItem(input) {
         await wait(latency);
-        const it = applyItem({ id: uid(), categoryId: input.categoryId, name: input.name, basePrice: input.basePrice, taxRateBps: input.taxRateBps ?? 500, isVeg: input.isVeg ?? true, isAvailable: input.isAvailable ?? true, sku: input.sku ?? null, description: input.description ?? null, variants: [], modifiers: [] }, input);
+        const it = applyItem({ id: uid(), categoryId: input.categoryId, name: input.name, basePrice: input.basePrice, taxRateBps: input.taxRateBps ?? 500, isVeg: input.isVeg ?? true, isAvailable: input.isAvailable ?? true, sku: input.sku ?? null, description: input.description ?? null, variants: [], modifierGroups: [] }, input);
         menuItems.push(it); itemById.set(it.id, it); return structuredClone(it);
       },
       async updateItem(id, input) { await wait(latency); const it = itemById.get(id); if (!it) throw new Error("Item not found"); return structuredClone(applyItem(it, input)); },
