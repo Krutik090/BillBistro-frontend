@@ -12,7 +12,7 @@ export type ApiMode = "mock" | "real" | "hybrid";
 /**
  * Single switch for the POS + dashboard. NEXT_PUBLIC_API_MODE:
  *  - mock   (default) everything in-memory
- *  - hybrid auth + outlets + menu + floor + orders/KOT from the API (phase1-backend); billing from the mock (until T-103 lands)
+ *  - hybrid (alias of real since T-103) everything from the API (phase1-backend)
  *  - real   everything from the API
  * NEXT_PUBLIC_API_URL (default http://localhost:4000), NEXT_PUBLIC_OUTLET_ID (optional: pin an outlet; default = first active from GET /v1/outlets).
  */
@@ -20,6 +20,6 @@ export function createPosApi(mode: ApiMode = (process.env.NEXT_PUBLIC_API_MODE a
   if (mode === "mock") return createMockApi();
   const real = createRealApi();
   if (mode === "real") return real;
-  const mock = createMockApi();
-  return { mode: "hybrid", auth: real.auth, outlets: real.outlets, menu: real.menu, tables: real.tables, orders: real.orders, kots: real.kots, billing: mock.billing };
+  // Every domain is real since T-103 landed; hybrid is kept as an alias so env files don't break.
+  return { ...real, mode: "hybrid" };
 }

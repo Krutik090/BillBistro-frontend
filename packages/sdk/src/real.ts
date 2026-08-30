@@ -17,7 +17,6 @@ const tableInfo = (s: { id: string; name: string }) => (t: FloorView["sections"]
 export function createRealApi(opts: RealApiOptions = {}): PosApi {
   const c = opts.client ?? createClient();
   const pinned = opts.outletId ?? (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_OUTLET_ID : undefined) ?? null;
-  const notYet = (what: string) => async () => { throw new NotImplementedError(what); };
 
   // Outlet resolution: pinned id, else first active outlet from GET /v1/outlets (cached per api instance).
   let outletP: Promise<Outlet> | null = null;
@@ -111,9 +110,12 @@ export function createRealApi(opts: RealApiOptions = {}): PosApi {
       setStatus: async (id, status) => normKot(await c.patch<KotTicket>(`/kots/${id}/status`, { status })),
     },
     billing: {
-      create: notYet("POST /bills (T-103)"),
-      pay: notYet("POST /bills/:id/payments (T-103)"),
-      finalize: notYet("POST /bills/:id/finalize (T-103)"),
+      // T-103 @ 746488d — server is the money authority (per-line tax, cgst floor/sgst rest, exact split shares).
+      create: (input) => c.post("/bills", input),
+      finalize: (id, version) => c.post(`/bills/${id}/finalize`, { version }),
+      pay: (id, input) => c.post(`/bills/${id}/payments`, input),
+      get: (id) => c.get(`/bills/${id}`),
+      receipt: (id) => c.get(`/bills/${id}/receipt`),
     },
   };
 }

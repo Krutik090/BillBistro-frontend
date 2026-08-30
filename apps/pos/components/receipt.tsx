@@ -1,50 +1,54 @@
 "use client";
+// Receipt = GET /v1/bills/:id/receipt (server-rendered numbers, tax summary, payments). 80mm print via window.print().
 import * as React from "react";
-import { Printer, Plus } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Printer, Plus, Loader2 } from "lucide-react";
 import { Button, Drawer } from "@billbistro/ui";
 import { usePos } from "../lib/store";
-import { computeTotals, lineLabel, lineTotal } from "../lib/calc";
+import { useApi } from "../lib/api";
 import { inr } from "../lib/format";
 
-const OUTLET = { name: "Spice Route", addr: "12, 80ft Road, Koramangala, Bengaluru 560034", gstin: "29ABCDE1234F1Z5", phone: "+91 98450 12345" };
-
-/** Receipt preview + browser print (80mm). The #receipt element is the only thing painted under @media print. */
 export function ReceiptSheet() {
   const s = usePos();
+  const api = useApi();
   const open = s.sheet === "receipt";
-  const t = computeTotals(s.lines, s.discount, s.tip);
-  const bill = s.bill;
-  const print = () => window.print();
+  const billId = s.bill?.id ?? null;
+  const rc = useQuery({ queryKey: ["receipt", billId], queryFn: () => api.billing.receipt(billId!), enabled: open && !!billId, staleTime: Infinity });
   const next = () => { s.reset(); };
+  const r = rc.data;
 
   return (
-    <Drawer open={open} onOpenChange={(o) => !o && next()} title="Receipt" footer={<><Button variant="secondary" size="lg" onClick={print}><Printer size={18} /> Print</Button><Button size="lg" onClick={next}><Plus size={18} /> New bill</Button></>}>
-      <div className="mx-auto w-[300px] rounded-md bg-neutral-0 p-4 font-mono text-[12px] leading-snug text-neutral-950 shadow-2" id="receipt">
-        <div className="text-center">
-          <div className="font-display text-base font-bold">{OUTLET.name}</div>
-          <div>{OUTLET.addr}</div><div>GSTIN {OUTLET.gstin} · {OUTLET.phone}</div>
+    <Drawer open={open} onOpenChange={(o) => !o && next()} title="Receipt" footer={<><Button variant="secondary" size="lg" onClick={() => window.print()} disabled={!r}><Printer size={18} /> Print</Button><Button size="lg" onClick={next}><Plus size={18} /> New bill</Button></>}>
+      {!r && <div className="flex items-center gap-2 text-sm text-muted">{rc.error ? <span className="text-danger">{String((rc.error as Error).message)}</span> : <><Loader2 size={14} className="animate-spin" /> Fetching receipt…</>}</div>}
+      {r && (
+        <div className="mx-auto w-[300px] rounded-md bg-neutral-0 p-4 font-mono text-[12px] leading-snug text-neutral-950 shadow-2" id="receipt">
+          <div className="text-center">
+            <div className="font-display text-base font-bold">{r.business.name}</div>
+            {r.outlet.address && <div>{r.outlet.address}</div>}
+            <div>{r.business.gstin ? `GSTIN ${r.business.gstin}` : ""}{r.outlet.phone ? ` · ${r.outlet.phone}` : ""}</div>
+          </div>
+          <Hr />
+          <div className="flex justify-between"><span>{r.bill.billNo}{r.bill.split ? ` (${r.bill.split})` : ""}</span><span>{new Date(r.bill.date).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" })}</span></div>
+          <div className="flex justify-between"><span>{r.bill.table ? `Table ${r.bill.table}` : "Counter"}</span><span>{r.bill.orderNo}{r.bill.cashier ? ` · ${r.bill.cashier}` : ""}</span></div>
+          <Hr />
+          <table className="w-full"><tbody>
+            {r.lines.map((l, i) => <tr key={i} className="align-top"><td className="pr-1">{l.qty}×</td><td className="w-full">{l.name}</td><td className="text-right">{inr(l.lineTotal)}</td></tr>)}
+          </tbody></table>
+          <Hr />
+          <Row k="Subtotal" v={inr(r.totals.subtotal)} />
+          {r.totals.discount > 0 && <Row k="Discount" v={`-${inr(r.totals.discount)}`} />}
+          {r.taxSummary.map((tx) => <React.Fragment key={tx.taxRateBps}><Row k={`CGST @${tx.taxRateBps / 200}%`} v={inr(tx.cgst)} /><Row k={`SGST @${tx.taxRateBps / 200}%`} v={inr(tx.sgst)} /></React.Fragment>)}
+          {r.totals.tip > 0 && <Row k="Tip" v={inr(r.totals.tip)} />}
+          {r.totals.roundOff !== 0 && <Row k="Round off" v={inr(r.totals.roundOff)} />}
+          <div className="mt-1 flex justify-between text-base font-bold"><span>TOTAL</span><span>{inr(r.totals.total)}</span></div>
+          {r.payments.map((p, i) => <Row key={i} k={`Paid · ${p.mode}${p.reference ? ` ${p.reference}` : ""}${p.change ? ` (change ${inr(p.change)})` : ""}`} v={inr(p.amount)} />)}
+          {r.totals.due > 0 && <Row k="Due" v={inr(r.totals.due)} />}
+          <Hr />
+          <div className="text-center text-[11px]">{r.footer ?? "Thank you! Visit again."}<br />Powered by BillBistro</div>
         </div>
-        <hr className="my-2 border-dashed border-neutral-400" />
-        <div className="flex justify-between"><span>{bill?.billNo ?? "DRAFT"}</span><span>{new Date(bill?.finalizedAt ?? Date.now()).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" })}</span></div>
-        <div className="flex justify-between"><span>{s.tableRef ? `Table ${s.tableRef}` : s.type.replace("_", "-")}</span><span>{s.orderNo}</span></div>
-        <hr className="my-2 border-dashed border-neutral-400" />
-        <table className="w-full"><tbody>
-          {s.lines.map((l) => (
-            <tr key={l.lineId} className="align-top"><td className="pr-1">{l.qty}×</td><td className="w-full">{l.item.name}{lineLabel(l) && <div className="text-[10px] text-neutral-600">{lineLabel(l)}</div>}</td><td className="text-right">{inr(lineTotal(l))}</td></tr>
-          ))}
-        </tbody></table>
-        <hr className="my-2 border-dashed border-neutral-400" />
-        <R k="Subtotal" v={inr(t.subtotal)} />
-        {t.discountAmt > 0 && <R k="Discount" v={`-${inr(t.discountAmt)}`} />}
-        {[...t.taxByRate].map(([bps, amt]) => <React.Fragment key={bps}><R k={`CGST @${bps / 200}%`} v={inr(Math.round(amt / 2))} /><R k={`SGST @${bps / 200}%`} v={inr(amt - Math.round(amt / 2))} /></React.Fragment>)}
-        {t.tip > 0 && <R k="Tip" v={inr(t.tip)} />}
-        {t.roundOff !== 0 && <R k="Round off" v={inr(t.roundOff)} />}
-        <div className="mt-1 flex justify-between text-base font-bold"><span>TOTAL</span><span>{inr(bill?.total ?? t.total)}</span></div>
-        {bill?.payments.map((p) => <R key={p.id} k={`Paid · ${p.mode}${p.reference ? ` ${p.reference}` : ""}`} v={inr(p.amount)} />)}
-        <hr className="my-2 border-dashed border-neutral-400" />
-        <div className="text-center text-[11px]">Thank you! Visit again.<br />Powered by BillBistro</div>
-      </div>
+      )}
     </Drawer>
   );
 }
-const R = ({ k, v }: { k: string; v: string }) => <div className="flex justify-between"><span>{k}</span><span>{v}</span></div>;
+const Hr = () => <hr className="my-2 border-dashed border-neutral-400" />;
+const Row = ({ k, v }: { k: string; v: string }) => <div className="flex justify-between"><span>{k}</span><span>{v}</span></div>;

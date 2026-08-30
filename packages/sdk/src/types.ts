@@ -19,7 +19,8 @@ export interface EffectiveMenu { outlet: { id: string; code: string; name: strin
 export type OrderType = "DINE_IN" | "TAKEAWAY" | "DELIVERY";
 export type OrderStatus = "OPEN" | "BILLED" | "SETTLED" | "CANCELLED";
 export type KotStatus = "PENDING" | "PREPARING" | "READY" | "SERVED" | "CANCELLED";
-export type BillStatus = "DRAFT" | "FINAL" | "VOID";
+/** DRAFT → FINAL (finalize; required before payments) → SETTLED (paid ≥ total) ; VOID */
+export type BillStatus = "DRAFT" | "FINAL" | "SETTLED" | "VOID";
 export type PaymentMode = "CASH" | "UPI" | "CARD" | "WALLET" | "OTHER";
 export type PaymentStatus = "PENDING" | "CAPTURED" | "FAILED" | "REFUNDED";
 
@@ -39,10 +40,24 @@ export interface Kot { id: string; orderId?: string; kotNo: string; status: KotS
 /** KDS feed row (GET /v1/kots): ticket + order/table context + lines with modifiers. */
 export interface KotTicket extends Kot { orderNo?: string; tableRef?: string | null; items?: { id: string; name: string; qty: number; variantName?: string | null; notes?: string | null; modifiers?: { name: string }[] }[] }
 
-export interface BillInput { orderId: string; discount?: Money; tip?: Money; splitOf?: { index: number; count: number } }
-export interface Bill { id: string; orderId: string; billNo: string; status: BillStatus; subtotal: Money; taxTotal: Money; discount: Money; tip: Money; roundOff: Money; total: Money; payments: Payment[]; finalizedAt?: string | null; createdAt: string }
-export interface PaymentInput { mode: PaymentMode; amount: Money; reference?: string | null; idempotencyKey: string }
-export interface Payment { id: string; billId: string; mode: PaymentMode; status: PaymentStatus; amount: Money; reference?: string | null; createdAt: string }
+export interface BillInput { orderId: string; mergeOrderIds?: string[]; discount?: Money; discountNote?: string; tip?: Money; splitOf?: { index: number; count: number }; clientKey?: string }
+export interface BillLine { name: string; qty: number; unitPrice: Money; lineTotal: Money; discount: Money; taxable: Money; taxRateBps: number; cgst: Money; sgst: Money; hsnCode?: string | null }
+export interface Bill {
+  id: string; orderId: string; billNo: string; status: BillStatus; splitIndex?: number; splitCount?: number;
+  subtotal: Money; discount: Money; taxable?: Money; cgst?: Money; sgst?: Money; taxTotal: Money; tip: Money; roundOff: Money; total: Money;
+  paidTotal?: Money; refundTotal?: Money; due?: Money; version?: number; businessDate?: string | null;
+  lines?: BillLine[]; payments: Payment[]; order?: { orderNo: string; status: OrderStatus; tableRef?: string | null } | null; finalizedAt?: string | null; createdAt?: string;
+}
+/** tendered (cash) lets the server compute change; reference is required for non-cash modes. */
+export interface PaymentInput { mode: PaymentMode; amount: Money; tendered?: Money; reference?: string | null; idempotencyKey: string }
+export interface Payment { id: string; billId: string; mode: PaymentMode; status: PaymentStatus; amount: Money; tendered?: Money | null; change?: Money; due?: Money; reference?: string | null; createdAt: string }
+/** GET /v1/bills/:id/receipt — 80mm-ready. */
+export interface Receipt {
+  business: { name: string; gstin?: string | null }; outlet: { name: string; address?: string | null; phone?: string | null };
+  bill: { billNo: string; date: string; orderNo?: string; table?: string | null; cashier?: string | null; split?: string | null };
+  lines: BillLine[]; totals: { subtotal: Money; discount: Money; taxable: Money; cgst: Money; sgst: Money; taxTotal: Money; tip: Money; roundOff: Money; total: Money; paid: Money; refunded: Money; due: Money };
+  taxSummary: { taxRateBps: number; taxable: Money; cgst: Money; sgst: Money }[]; payments: { mode: PaymentMode; amount: Money; tendered?: Money | null; change?: Money | null; reference?: string | null }[]; footer?: string | null;
+}
 
 export interface CategoryInput { name: string; description?: string; sortOrder?: number; isActive?: boolean }
 export interface ItemInput {
@@ -102,7 +117,10 @@ export interface PosApi {
   };
   billing: {
     create(input: BillInput): Promise<Bill>;
+    /** DRAFT → FINAL. Required before payments; stamps businessDate, order/table → BILLED. */
+    finalize(billId: string, version?: number): Promise<Bill>;
     pay(billId: string, input: PaymentInput): Promise<Payment>;
-    finalize(billId: string): Promise<Bill>;
+    get(billId: string): Promise<Bill>;
+    receipt(billId: string): Promise<Receipt>;
   };
 }

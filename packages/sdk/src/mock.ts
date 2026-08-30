@@ -182,27 +182,54 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
         const tip = shareOf(input.tip ?? 0);
         const raw = taxable + taxTotal + tip;
         const total = Math.round(raw / 100) * 100;
-        const b: Bill = { id: uid(), orderId: o.id, billNo: `B-${++billSeq}${input.splitOf ? `/${input.splitOf.index + 1}` : ""}`, status: "DRAFT", subtotal, taxTotal, discount: disc, tip, roundOff: total - raw, total, payments: [], createdAt: now() };
-        bills.set(b.id, b); o.status = "BILLED"; o.discount = discount;
+        if ([...bills.values()].some((x) => x.orderId === o.id && x.status !== "VOID" && (x.splitIndex ?? 0) === index && (x.splitCount ?? 1) === count)) throw new Error("Bill already exists for this order/share (409)");
+        const cgst = Math.floor(taxTotal / 2);
+        const b: Bill = { id: uid(), orderId: o.id, billNo: `B-${++billSeq}${input.splitOf ? `/${input.splitOf.index + 1}` : ""}`, status: "DRAFT", splitIndex: index, splitCount: count, subtotal, discount: disc, taxable, cgst, sgst: taxTotal - cgst, taxTotal, tip, roundOff: total - raw, total, paidTotal: 0, refundTotal: 0, due: total, version: 1, payments: [],
+          lines: o.items.map((l) => { const ls = shareOf(l.lineTotal); const ld = Math.round(ls * (1 - factor)); const tx = Math.round(ls * factor * l.taxRateBps / 10000); return { name: l.name, qty: l.qty, unitPrice: l.unitPrice, lineTotal: ls, discount: ld, taxable: ls - ld, taxRateBps: l.taxRateBps, cgst: Math.floor(tx / 2), sgst: tx - Math.floor(tx / 2) }; }),
+          order: { orderNo: o.orderNo, status: o.status, tableRef: o.tableRef }, createdAt: now() };
+        bills.set(b.id, b); o.discount = discount;
+        return structuredClone(b);
+      },
+      async finalize(billId, version) {
+        await wait(latency);
+        const b = bills.get(billId); if (!b) throw new Error("Bill not found");
+        if (version !== undefined && version !== b.version) throw new Error("Stale bill version (409)");
+        if (b.status !== "DRAFT") throw new Error(`Bill is ${b.status} (409)`);
+        b.status = "FINAL"; b.finalizedAt = now(); b.businessDate = now().slice(0, 10); b.version = (b.version ?? 1) + 1;
+        const o = orders.get(b.orderId); if (o) { o.status = "BILLED"; const t = tables.find((x) => x.id === o.tableId); if (t) t.status = "BILLED"; }
         return structuredClone(b);
       },
       async pay(billId, input) {
         await wait(latency * 3);
         const b = bills.get(billId); if (!b) throw new Error("Bill not found");
         const dup = b.payments.find((p) => p.id === input.idempotencyKey); if (dup) return structuredClone(dup);
-        if (input.mode === "UPI" && !input.reference) throw new Error("UPI reference required");
-        const p: Payment = { id: input.idempotencyKey, billId, mode: input.mode, status: "CAPTURED", amount: input.amount, reference: input.reference ?? null, createdAt: now() };
+        if (b.status !== "FINAL") throw new Error(`Bill must be FINAL to take payment (409, is ${b.status})`);
+        if (input.mode !== "CASH" && !input.reference) throw new Error("Reference required for non-cash payments (422)");
+        if (input.amount > (b.due ?? 0)) throw new Error(`Amount exceeds due ${b.due} (422)`);
+        const change = input.mode === "CASH" && input.tendered ? Math.max(0, input.tendered - input.amount) : 0;
+        b.paidTotal = (b.paidTotal ?? 0) + input.amount; b.due = b.total - b.paidTotal;
+        const p: Payment = { id: input.idempotencyKey, billId, mode: input.mode, status: "CAPTURED", amount: input.amount, tendered: input.tendered ?? null, change, due: b.due, reference: input.reference ?? null, createdAt: now() };
         b.payments.push(p);
+        if (b.due <= 0) {
+          b.status = "SETTLED";
+          const o = orders.get(b.orderId);
+          const shares = [...bills.values()].filter((x) => x.orderId === b.orderId && x.status !== "VOID");
+          if (o && shares.length >= (b.splitCount ?? 1) && shares.every((x) => x.status === "SETTLED")) { o.status = "SETTLED"; const t = tables.find((x) => x.id === o.tableId); if (t) { t.status = "FREE"; t.orderId = null; } }
+        }
         return structuredClone(p);
       },
-      async finalize(billId) {
-        await wait(latency);
+      async get(billId) { await wait(latency / 2); const b = bills.get(billId); if (!b) throw new Error("Bill not found"); return structuredClone(b); },
+      async receipt(billId) {
+        await wait(latency / 2);
         const b = bills.get(billId); if (!b) throw new Error("Bill not found");
-        const paid = b.payments.filter((p) => p.status === "CAPTURED").reduce((s, p) => s + p.amount, 0);
-        if (paid < b.total) throw new Error(`Bill not fully paid (${paid}/${b.total})`);
-        b.status = "FINAL"; b.finalizedAt = now();
-        const o = orders.get(b.orderId); if (o) o.status = "SETTLED";
-        return structuredClone(b);
+        const byRate = new Map<number, { taxable: number; cgst: number; sgst: number }>();
+        for (const l of b.lines ?? []) { const r = byRate.get(l.taxRateBps) ?? { taxable: 0, cgst: 0, sgst: 0 }; r.taxable += l.taxable; r.cgst += l.cgst; r.sgst += l.sgst; byRate.set(l.taxRateBps, r); }
+        return {
+          business: { name: "Spice Route", gstin: "29ABCDE1234F1Z5" }, outlet: { name: "Koramangala", address: "12, 80ft Road, Koramangala, Bengaluru 560034", phone: "+91 98450 12345" },
+          bill: { billNo: b.billNo, date: b.finalizedAt ?? b.createdAt ?? now(), orderNo: b.order?.orderNo, table: b.order?.tableRef ?? null, cashier: "Priya", split: (b.splitCount ?? 1) > 1 ? `${(b.splitIndex ?? 0) + 1}/${b.splitCount}` : null },
+          lines: b.lines ?? [], totals: { subtotal: b.subtotal, discount: b.discount, taxable: b.taxable ?? 0, cgst: b.cgst ?? 0, sgst: b.sgst ?? 0, taxTotal: b.taxTotal, tip: b.tip, roundOff: b.roundOff, total: b.total, paid: b.paidTotal ?? 0, refunded: b.refundTotal ?? 0, due: b.due ?? 0 },
+          taxSummary: [...byRate].map(([taxRateBps, r]) => ({ taxRateBps, ...r })), payments: b.payments.map((p) => ({ mode: p.mode, amount: p.amount, tendered: p.tendered, change: p.change, reference: p.reference })), footer: "Thank you! Visit again.",
+        };
       },
     },
   };

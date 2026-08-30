@@ -99,14 +99,34 @@ let ordersNote = "";
   assert(o3.items.length === 3 && o3.items.find((i) => i.clientLineId === "L2")?.qty === 3 && o3.items.find((i) => i.id === l1.id)?.kotId === kot.id, "replace keeps sent line, edits unsent");
   let immut = false; try { await api.orders.replaceItems(o1.id, [{ ...keep, qty: keep.qty + 1 }], o3.version); } catch { immut = true; } assert(immut, "sent line qty change rejected (422)");
   let stale = false; try { await api.orders.replaceItems(o1.id, [keep], o2.version); } catch { stale = true; } assert(stale, "stale order version rejected (409)");
-  const oc = await api.orders.cancel(o1.id, "smoke cleanup", o3.version);
-  assert(oc.status === "CANCELLED", "cancel");
-  const freed = (await api.tables.list()).find((t) => t.id === free.id)!;
-  assert(freed.status === "FREE", "cancel frees table");
-  ordersNote = `${o1.orderNo} on ${free.name}: 2 lines (client==server ₹${o1.subtotal / 100}) → KOT ${kot.kotNo} PENDING→PREPARING→READY → replace(3) → 422/409 guarded → cancelled`;
+
+  // BILLING (T-103 @ 746488d): 10% discount + ₹50 tip, split 2 ways → finalize → pay (UPI, then cash w/ change) → SETTLED → table FREE → receipt
+  const disc = Math.round(o3.subtotal * 0.1);
+  const b1 = await api.billing.create({ orderId: o1.id, discount: disc, tip: 5000, splitOf: { index: 0, count: 2 }, clientKey: `${key}:b1` });
+  assert(b1.status === "DRAFT" && b1.total % 100 === 0 && (b1.cgst ?? 0) + (b1.sgst ?? 0) === b1.taxTotal, "bill draft, rupee-rounded, cgst+sgst=tax");
+  assert(b1.taxTotal === (b1.lines ?? []).reduce((s, l) => s + l.cgst + l.sgst, 0), "bill tax = Σ per-line");
+  let payDraft = false; try { await api.billing.pay(b1.id, { mode: "CASH", amount: b1.total, idempotencyKey: `${key}:p0` }); } catch { payDraft = true; } assert(payDraft, "pay before finalize rejected (409)");
+  const f1 = await api.billing.finalize(b1.id, b1.version);
+  assert(f1.status === "FINAL" && !!f1.businessDate, "finalized w/ businessDate");
+  assert((await api.tables.list()).find((t) => t.id === free.id)!.status === "BILLED", "table BILLED after finalize");
+  let over = false; try { await api.billing.pay(f1.id, { mode: "UPI", amount: f1.total + 100, reference: "UTR1", idempotencyKey: `${key}:px` }); } catch { over = true; } assert(over, "amount > due rejected (422)");
+  const p1 = await api.billing.pay(f1.id, { mode: "UPI", amount: f1.total, reference: "UTR12345", idempotencyKey: `${key}:p1` });
+  const p1b = await api.billing.pay(f1.id, { mode: "UPI", amount: f1.total, reference: "UTR12345", idempotencyKey: `${key}:p1` });
+  assert(p1.id === p1b.id, "payment idempotent");
+  assert((await api.billing.get(f1.id)).status === "SETTLED", "share 1 SETTLED");
+  const b2 = await api.billing.create({ orderId: o1.id, discount: disc, tip: 5000, splitOf: { index: 1, count: 2 }, clientKey: `${key}:b2` });
+  assert(b1.subtotal + b2.subtotal === o3.subtotal && b1.tip + b2.tip === 5000 && b1.discount + b2.discount === disc, "split shares sum exactly");
+  const f2 = await api.billing.finalize(b2.id, b2.version);
+  const p2 = await api.billing.pay(f2.id, { mode: "CASH", amount: f2.total, tendered: f2.total + 5000, idempotencyKey: `${key}:p2` });
+  assert(p2.change === 5000, `cash change 5000 (got ${p2.change})`);
+  assert((await api.orders.get(o1.id)).status === "SETTLED", "order SETTLED after all shares");
+  assert((await api.tables.list()).find((t) => t.id === free.id)!.status === "FREE", "table FREE after settlement");
+  const rc = await api.billing.receipt(f2.id);
+  assert(rc.bill.billNo === f2.billNo && rc.totals.total === f2.total && rc.totals.due === 0 && rc.taxSummary.length > 0 && rc.payments[0].mode === "CASH", "receipt shape");
+  ordersNote = `${o1.orderNo} on ${free.name}: client==server ₹${o1.subtotal / 100} → KOT ${kot.kotNo} PENDING→PREPARING→READY → replace(3) → 422/409 → bills ${f1.billNo}+${f2.billNo} (UPI, cash change ₹50) → SETTLED, table FREE, receipt OK`;
   } finally {
-    // never leave a seeded table occupied by a smoke order
-    const o = await api.orders.get(o1.id); if (o.status === "OPEN") await api.orders.cancel(o1.id, "smoke cleanup", o.version).catch(() => {});
+    // never leave a seeded table occupied by a smoke order (settled orders free the table themselves)
+    const o = await api.orders.get(o1.id); if (o.status === "OPEN" || o.status === "BILLED") await api.orders.cancel(o1.id, "smoke cleanup", o.version).catch(() => {});
   }
 }
 console.log("real API smoke OK:", { outlet: `${cur.code} ${cur.id.slice(0, 8)}`, categories: cats.length, items: after.length, created: created.name, floor, orders: ordersNote });

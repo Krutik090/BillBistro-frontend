@@ -33,19 +33,27 @@ assert(o3.items.find((i) => i.id === "L1")!.kotId === kot.id, "KOT survives repl
 const edited = await api.menu.updateItem(naan.id, { modifiers: [{ id: allOptions(naan)[0].id, name: "Extra butter", price: 1500 }, { name: "Garlic overload", price: 2000 }], variants: [{ name: "Double", priceDelta: 5000 }] });
 assert(allOptions(edited).length === 2 && edited.modifierGroups[0].maxSelect === 2 && edited.variants.length === 1, "menu admin diff applied");
 
-// 10% discount + ₹50 tip → bill, split 2 ways
+// 10% discount + ₹50 tip → bill, split 2 ways. Flow: create (DRAFT) → finalize (FINAL) → pay → SETTLED
 const bill1 = await api.billing.create({ orderId: order.id, discount: Math.round(o3.subtotal * 0.1), tip: 5000, splitOf: { index: 0, count: 2 } });
 assert(bill1.total % 100 === 0 && Math.abs(bill1.roundOff) < 100, "bill rounded to rupee");
-let threw = false; try { await api.billing.finalize(bill1.id); } catch { threw = true; } assert(threw, "cannot finalize unpaid bill");
-threw = false; try { await api.billing.pay(bill1.id, { mode: "UPI", amount: bill1.total, idempotencyKey: "k1" }); } catch { threw = true; } assert(threw, "UPI needs reference");
-const p1 = await api.billing.pay(bill1.id, { mode: "UPI", amount: bill1.total, reference: "UTR1234", idempotencyKey: "k1" });
-const p1b = await api.billing.pay(bill1.id, { mode: "UPI", amount: bill1.total, reference: "UTR1234", idempotencyKey: "k1" });
-assert(p1.id === p1b.id, "idempotent payment");
-const fin1 = await api.billing.finalize(bill1.id);
-assert(fin1.status === "FINAL", "bill finalized");
+assert(bill1.cgst! + bill1.sgst! === bill1.taxTotal && bill1.cgst === Math.floor(bill1.taxTotal / 2), "cgst floor / sgst rest");
+let threw = false; try { await api.billing.pay(bill1.id, { mode: "CASH", amount: bill1.total, idempotencyKey: "k0" }); } catch { threw = true; } assert(threw, "cannot pay a DRAFT bill (409)");
+const fin1 = await api.billing.finalize(bill1.id, bill1.version);
+assert(fin1.status === "FINAL" && !!fin1.businessDate, "bill finalized");
+threw = false; try { await api.billing.pay(fin1.id, { mode: "UPI", amount: fin1.total, idempotencyKey: "k1" }); } catch { threw = true; } assert(threw, "UPI needs reference");
+threw = false; try { await api.billing.pay(fin1.id, { mode: "CASH", amount: fin1.total + 100, idempotencyKey: "k1x" }); } catch { threw = true; } assert(threw, "amount > due rejected (422)");
+const p1 = await api.billing.pay(fin1.id, { mode: "UPI", amount: fin1.total, reference: "UTR1234", idempotencyKey: "k1" });
+const p1b = await api.billing.pay(fin1.id, { mode: "UPI", amount: fin1.total, reference: "UTR1234", idempotencyKey: "k1" });
+assert(p1.id === p1b.id && p1.due === 0, "idempotent payment, due 0");
+assert((await api.billing.get(fin1.id)).status === "SETTLED", "share 1 settled");
+assert((await api.orders.get(order.id)).status !== "SETTLED", "order not settled until all shares paid");
 const bill2 = await api.billing.create({ orderId: order.id, discount: Math.round(o3.subtotal * 0.1), tip: 5000, splitOf: { index: 1, count: 2 } });
-await api.billing.pay(bill2.id, { mode: "CASH", amount: bill2.total, idempotencyKey: "k2" });
-await api.billing.finalize(bill2.id);
+assert(bill1.subtotal + bill2.subtotal === o3.subtotal && bill1.tip + bill2.tip === 5000, "split shares sum exactly");
+const fin2 = await api.billing.finalize(bill2.id);
+const p2 = await api.billing.pay(fin2.id, { mode: "CASH", amount: fin2.total, tendered: fin2.total + 5000, idempotencyKey: "k2" });
+assert(p2.change === 5000, "cash change computed");
 assert((await api.orders.get(order.id)).status === "SETTLED", "order settled after all shares paid");
+const rc = await api.billing.receipt(fin2.id);
+assert(rc.bill.billNo === fin2.billNo && rc.totals.total === fin2.total && rc.taxSummary.length > 0 && rc.payments[0].mode === "CASH", "receipt shape");
 
-console.log("mock flow OK:", { orderNo: order.orderNo, subtotal: o3.subtotal, tax: o3.taxTotal, share: bill1.total, bills: [fin1.billNo, bill2.billNo] });
+console.log("mock flow OK:", { orderNo: order.orderNo, subtotal: o3.subtotal, tax: o3.taxTotal, share: bill1.total, bills: [fin1.billNo, fin2.billNo] });
