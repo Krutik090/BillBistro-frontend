@@ -1,6 +1,6 @@
 // In-memory typed mock of PosApi. Same money math contract as the API (int paise, GST bps).
 // Latency is simulated so optimistic UI paths are exercised.
-import type { Bill, BillInput, ItemInput, Kot, MenuCategory, MenuItem, Order, OrderInput, OrderItemInput, Outlet, Payment, PaymentInput, PosApi, Principal, TableInfo, TableStatus } from "./types";
+import type { Bill, BillInput, DayClose, ItemInput, Kot, MenuCategory, MenuItem, Order, OrderInput, OrderItemInput, Outlet, Payment, PaymentInput, PosApi, Principal, Refund, TableInfo, TableStatus } from "./types";
 import { allOptions, itemPrice } from "./types";
 
 const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -61,6 +61,8 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
   const latency = opts.latencyMs ?? 120;
   const orders = new Map<string, Order>();
   const bills = new Map<string, Bill>();
+  const refunds: Refund[] = [];
+  const closedDays = new Map<string, string>();
   let orderSeq = 1041, kotSeq = 17, billSeq = 1041;
   // Menu is mutable per api instance (menu management UI edits it).
   const tables: TableInfo[] = structuredClone(MOCK_TABLES);
@@ -165,6 +167,25 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
         throw new Error("KOT not found");
       },
     },
+    dayClose: {
+      async get(businessDate) {
+        await wait(latency / 2);
+        const date = businessDate ?? now().slice(0, 10);
+        const day = [...bills.values()].filter((b) => (b.businessDate ?? b.createdAt?.slice(0, 10)) === date && b.status !== "DRAFT");
+        const settled = day.filter((b) => b.status !== "VOID");
+        const sum = (f: (b: Bill) => number) => settled.reduce((s, b) => s + f(b), 0);
+        const byMode: DayClose["totals"]["byMode"] = {};
+        for (const b of settled) for (const p of b.payments) { const m = (byMode[p.mode] ??= { collected: 0, refunded: 0, count: 0 }); m.collected += p.amount; m.count++; m.refunded += refunds.filter((r) => r.paymentId === p.id).reduce((s, r) => s + r.amount, 0); }
+        const collected = sum((b) => b.paidTotal ?? 0), refunded = sum((b) => b.refundTotal ?? 0);
+        return { status: closedDays.has(date) ? "CLOSED" : "OPEN", businessDate: date, closedAt: closedDays.get(date) ?? null, totals: { bills: settled.length, orders: new Set(settled.map((b) => b.orderId)).size, grossSales: sum((b) => b.subtotal), discounts: sum((b) => b.discount), taxableSales: sum((b) => b.taxable ?? 0), cgst: sum((b) => b.cgst ?? 0), sgst: sum((b) => b.sgst ?? 0), taxTotal: sum((b) => b.taxTotal), tips: sum((b) => b.tip), roundOff: sum((b) => b.roundOff), netSales: sum((b) => b.total), collected, refunded, byMode, voids: day.length - settled.length, cashExpected: (byMode.CASH?.collected ?? 0) - (byMode.CASH?.refunded ?? 0) } };
+      },
+      async close(businessDate, note) {
+        await wait(latency);
+        if ([...bills.values()].some((b) => b.status === "FINAL" && (b.businessDate ?? "") === businessDate)) throw new Error("Unpaid FINAL bills exist (409)");
+        closedDays.set(businessDate, now()); void note;
+        return this.get(businessDate);
+      },
+    },
     billing: {
       async create(input) {
         await wait(latency);
@@ -219,6 +240,33 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
         return structuredClone(p);
       },
       async get(billId) { await wait(latency / 2); const b = bills.get(billId); if (!b) throw new Error("Bill not found"); return structuredClone(b); },
+      async update(billId, input, version) {
+        await wait(latency);
+        const b = bills.get(billId); if (!b) throw new Error("Bill not found");
+        if (b.status !== "DRAFT") throw new Error("Only DRAFT bills can change (409)");
+        if (version !== undefined && version !== b.version) throw new Error("Stale bill version (409)");
+        const o = orders.get(b.orderId)!; bills.delete(billId);
+        const fresh = await this.create({ orderId: o.id, discount: input.discount ?? b.discount * (b.splitCount ?? 1), tip: input.tip ?? b.tip * (b.splitCount ?? 1), splitOf: (b.splitCount ?? 1) > 1 ? { index: b.splitIndex ?? 0, count: b.splitCount! } : undefined });
+        bills.delete(fresh.id); const kept = { ...fresh, id: b.id, billNo: b.billNo, version: (b.version ?? 1) + 1 }; bills.set(b.id, kept); return structuredClone(kept);
+      },
+      async refund(paymentId, input) {
+        await wait(latency);
+        for (const b of bills.values()) { const p = b.payments.find((x) => x.id === paymentId); if (!p) continue;
+          const dup = refunds.find((r) => r.id === input.idempotencyKey); if (dup) return structuredClone(dup);
+          const refundable = p.amount - refunds.filter((r) => r.paymentId === paymentId).reduce((s, r) => s + r.amount, 0);
+          if (input.amount > refundable) throw new Error(`Refund exceeds refundable ${refundable} (422)`);
+          const r: Refund = { id: input.idempotencyKey, paymentId, amount: input.amount, reason: input.reason, reference: input.reference ?? null, createdAt: now() };
+          refunds.push(r); b.refundTotal = (b.refundTotal ?? 0) + input.amount; return structuredClone(r); }
+        throw new Error("Payment not found");
+      },
+      async void(billId, reason) {
+        await wait(latency);
+        const b = bills.get(billId); if (!b) throw new Error("Bill not found");
+        if ((b.paidTotal ?? 0) - (b.refundTotal ?? 0) !== 0) throw new Error("Refund payments before voiding (409)");
+        b.status = "VOID"; b.version = (b.version ?? 1) + 1; void reason;
+        const o = orders.get(b.orderId); if (o) { o.status = "OPEN"; const t = tables.find((x) => x.id === o.tableId); if (t) { t.status = "OCCUPIED"; t.orderId = o.id; } }
+        return structuredClone(b);
+      },
       async receipt(billId) {
         await wait(latency / 2);
         const b = bills.get(billId); if (!b) throw new Error("Bill not found");

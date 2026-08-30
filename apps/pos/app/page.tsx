@@ -2,8 +2,8 @@
 // POS billing screen (T-111). Layout per docs/design/hero-pos-billing.png: rail · catalog · bill panel.
 import * as React from "react";
 import Link from "next/link";
-import { Receipt, LayoutGrid, ClipboardList, ChefHat, MoreHorizontal } from "lucide-react";
 import { AppShell } from "@billbistro/ui";
+import { posNav } from "../lib/nav";
 import { ApiProvider } from "../lib/api";
 import { usePos } from "../lib/store";
 import { useHotkeys } from "../lib/hotkeys";
@@ -16,14 +16,6 @@ import { TableSheet, HoldSheet, KotSheet, DiscountSheet, SplitSheet } from "../c
 import { PaymentSheet } from "../components/payment-sheet";
 import { ReceiptSheet } from "../components/receipt";
 import { Toast } from "../components/toast";
-
-const nav = [
-  { label: "Bill", href: "/", icon: <Receipt size={20} /> },
-  { label: "Tables", href: "/tables", icon: <LayoutGrid size={20} /> },
-  { label: "Orders", href: "/orders", icon: <ClipboardList size={20} /> },
-  { label: "KDS", href: "/kds", icon: <ChefHat size={20} /> },
-  { label: "More", href: "/more", icon: <MoreHorizontal size={20} /> },
-];
 
 export default function PosPage() {
   return (
@@ -47,7 +39,7 @@ function PosScreen() {
   useHotkeys(keys);
 
   return (
-    <AppShell app="POS" nav={nav} activeHref="/" variant="rail" Link={Link} headerRight={<HealthDot />}>
+    <AppShell app="POS" nav={posNav} activeHref="/" variant="rail" Link={Link} headerRight={<HealthDot />}>
       <PwaRegister />
       <div className="flex h-full print:hidden">
         <Catalog searchRef={searchRef} />

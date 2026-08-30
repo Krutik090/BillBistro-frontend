@@ -59,7 +59,7 @@ let floor = "";
   floor = `${tables.length} tables in ${new Set(tables.map((t) => t.section)).size} sections; effective menu ${eff.length} items`;
 }
 // Orders + KOT (T-102 @ 23e4f71): seat a free table → edit (full-list replace, sent lines immutable) → KOT → cancel frees the table.
-let ordersNote = "";
+let ordersNote = "", dayNote = "";
 {
   const menu = await api.menu.effective();
   const a = menu[0], b = menu[1] ?? menu[0];
@@ -123,10 +123,22 @@ let ordersNote = "";
   assert((await api.tables.list()).find((t) => t.id === free.id)!.status === "FREE", "table FREE after settlement");
   const rc = await api.billing.receipt(f2.id);
   assert(rc.bill.billNo === f2.billNo && rc.totals.total === f2.total && rc.totals.due === 0 && rc.taxSummary.length > 0 && rc.payments[0].mode === "CASH", "receipt shape");
+  // Refund (partial, idempotent, capped) + day-close Z-report reflects it. POST day-close is NOT run here (it would block finalize/pay for the rest of the business date) — set SMOKE_DAY_CLOSE=1 to exercise it.
+  const r1 = await api.billing.refund(p2.id, { amount: 1000, reason: "smoke: spilled lassi", idempotencyKey: `${key}:r1` });
+  const r1b = await api.billing.refund(p2.id, { amount: 1000, reason: "smoke: spilled lassi", idempotencyKey: `${key}:r1` });
+  assert(r1.id === r1b.id && r1.amount === 1000, "refund idempotent");
+  let overRefund = false; try { await api.billing.refund(p2.id, { amount: p2.amount, reason: "too much", idempotencyKey: `${key}:r2` }); } catch { overRefund = true; } assert(overRefund, "refund > refundable rejected (422)");
+  assert(((await api.billing.get(f2.id)).refundTotal ?? 0) === 1000, "bill refundTotal updated");
+  let voidPaid = false; try { await api.billing.void(f2.id, "smoke"); } catch { voidPaid = true; } assert(voidPaid, "void of a paid bill rejected (409)");
+  const z = await api.dayClose.get();
+  assert(z.status === "OPEN" || z.status === "CLOSED", "day-close status");
+  assert(z.totals.collected >= f1.total + f2.total && z.totals.refunded >= 1000 && (z.totals.byMode.CASH?.collected ?? 0) >= f2.total, "Z-report includes today's bills + refund");
+  if (process.env.SMOKE_DAY_CLOSE === "1") { const zc = await api.dayClose.close(z.businessDate ?? new Date().toISOString().slice(0, 10), "smoke close"); assert(zc.status === "CLOSED", "day closed"); }
+  dayNote = `Z: ${z.status} · net ${z.totals.netSales / 100} · collected ${z.totals.collected / 100} · refunded ${z.totals.refunded / 100} · cash drawer ${z.totals.cashExpected / 100}`;
   ordersNote = `${o1.orderNo} on ${free.name}: client==server ₹${o1.subtotal / 100} → KOT ${kot.kotNo} PENDING→PREPARING→READY → replace(3) → 422/409 → bills ${f1.billNo}+${f2.billNo} (UPI, cash change ₹50) → SETTLED, table FREE, receipt OK`;
   } finally {
     // never leave a seeded table occupied by a smoke order (settled orders free the table themselves)
     const o = await api.orders.get(o1.id); if (o.status === "OPEN" || o.status === "BILLED") await api.orders.cancel(o1.id, "smoke cleanup", o.version).catch(() => {});
   }
 }
-console.log("real API smoke OK:", { outlet: `${cur.code} ${cur.id.slice(0, 8)}`, categories: cats.length, items: after.length, created: created.name, floor, orders: ordersNote });
+console.log("real API smoke OK:", { outlet: `${cur.code} ${cur.id.slice(0, 8)}`, categories: cats.length, items: after.length, created: created.name, floor, orders: ordersNote, dayClose: dayNote });

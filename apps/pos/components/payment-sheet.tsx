@@ -39,18 +39,22 @@ export function PaymentSheet() {
   }, [open, s.orderId, s.splitIndex, s.splitCount]);
 
   const tenderedPaise = Math.round(Number(tendered || 0) * 100);
+  // Split tender: cash pays min(tendered, due); anything left stays due and the sheet asks for the next payment.
+  const cashAmount = Math.min(tenderedPaise, due);
   const change = mode === "CASH" && tenderedPaise > due ? tenderedPaise - due : 0;
-  const canPay = !!bill && !busy && due > 0 && (mode === "CASH" ? tenderedPaise >= due : ref.trim().length >= 4);
+  const canPay = !!bill && !busy && due > 0 && (mode === "CASH" ? tenderedPaise > 0 : ref.trim().length >= 4);
 
   const pay = async () => {
     if (!bill) return;
     setBusy(true); setErr(null);
     try {
-      const p = await api.billing.pay(bill.id, { mode, amount: due, tendered: mode === "CASH" ? tenderedPaise : undefined, reference: mode === "CASH" ? null : ref.trim(), idempotencyKey: uid() });
+      const p = await api.billing.pay(bill.id, { mode, amount: mode === "CASH" ? cashAmount : due, tendered: mode === "CASH" ? tenderedPaise : undefined, reference: mode === "CASH" ? null : ref.trim(), idempotencyKey: uid() });
       const fresh = await api.billing.get(bill.id);
-      const done = [...settled, fresh];
-      setSettled(done); s.setBill(fresh);
+      setBill(fresh); s.setBill(fresh); setTendered(""); setRef("");
       const chg = p.change ?? change;
+      if ((fresh.due ?? fresh.total - (fresh.paidTotal ?? 0)) > 0) { s.notify(`${inr(p.amount)} taken · ${inr(fresh.due ?? 0)} still due`); return; }
+      const done = [...settled, fresh];
+      setSettled(done);
       if (s.splitCount > 1 && s.splitIndex < s.splitCount - 1) {
         s.notify(`Share ${s.splitIndex + 1}/${s.splitCount} paid${chg ? ` · change ${inr(chg)}` : ""}`);
         s.setSplit(s.splitCount, s.splitIndex + 1); // effect above creates + finalizes the next share
@@ -64,7 +68,7 @@ export function PaymentSheet() {
 
   return (
     <Drawer open={open} onOpenChange={(o) => !o && s.openSheet(null)} title={s.splitCount > 1 ? `Pay share ${s.splitIndex + 1} of ${s.splitCount}` : "Payment"}
-      footer={<><Button variant="secondary" size="lg" onClick={() => s.openSheet(null)}>Back</Button><Button size="lg" variant="glow" disabled={!canPay} onClick={pay}>{busy ? <Loader2 className="animate-spin" /> : <Check />} {mode === "CASH" ? "Take cash" : mode === "UPI" ? "Confirm UPI" : "Mark paid"} {inr(due)}</Button></>}>
+      footer={<><Button variant="secondary" size="lg" onClick={() => s.openSheet(null)}>Back</Button><Button size="lg" variant="glow" disabled={!canPay} onClick={pay}>{busy ? <Loader2 className="animate-spin" /> : <Check />} {mode === "CASH" ? `Take cash ${inr(cashAmount || due)}` : mode === "UPI" ? `Confirm UPI ${inr(due)}` : `Mark paid ${inr(due)}`}</Button></>}>
       <div className="flex flex-col gap-5">
         <div className="rounded-xl border border-border bg-surface-raised p-4">
           {!bill && !err && <div className="flex items-center gap-2 text-sm text-muted"><Loader2 size={14} className="animate-spin" /> Creating bill…</div>}
@@ -75,6 +79,7 @@ export function PaymentSheet() {
               <R k="Subtotal" v={inr(bill.subtotal)} />{bill.discount > 0 && <R k="Discount" v={`−${inr(bill.discount)}`} />}
               <R k="CGST" v={inr(bill.cgst ?? Math.floor(bill.taxTotal / 2))} /><R k="SGST" v={inr(bill.sgst ?? bill.taxTotal - Math.floor(bill.taxTotal / 2))} />
               {bill.tip > 0 && <R k="Tip" v={inr(bill.tip)} />}<R k="Total" v={inr(bill.total)} />
+              {(bill.paidTotal ?? 0) > 0 && <R k="Paid so far" v={inr(bill.paidTotal ?? 0)} />}
             </div>
           </>}
           {err && <p className="text-sm text-danger">{err}</p>}

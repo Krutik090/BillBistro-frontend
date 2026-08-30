@@ -55,5 +55,12 @@ assert(p2.change === 5000, "cash change computed");
 assert((await api.orders.get(order.id)).status === "SETTLED", "order settled after all shares paid");
 const rc = await api.billing.receipt(fin2.id);
 assert(rc.bill.billNo === fin2.billNo && rc.totals.total === fin2.total && rc.taxSummary.length > 0 && rc.payments[0].mode === "CASH", "receipt shape");
+const rf = await api.billing.refund(p2.id, { amount: 1000, reason: "test", idempotencyKey: "r1" });
+assert(rf.amount === 1000 && (await api.billing.get(fin2.id)).refundTotal === 1000, "refund");
+let vp = false; try { await api.billing.void(fin2.id, "x"); } catch { vp = true; } assert(vp, "void paid bill rejected");
+const z = await api.dayClose.get();
+assert(z.totals.bills === 2 && z.totals.refunded === 1000 && z.totals.cashExpected === fin2.total - 1000 && z.totals.byMode.UPI.collected === fin1.total, "Z-report totals");
+const zc = await api.dayClose.close(z.businessDate!);
+assert(zc.status === "CLOSED", "day closed");
 
 console.log("mock flow OK:", { orderNo: order.orderNo, subtotal: o3.subtotal, tax: o3.taxTotal, share: bill1.total, bills: [fin1.billNo, fin2.billNo] });

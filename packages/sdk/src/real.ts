@@ -112,10 +112,17 @@ export function createRealApi(opts: RealApiOptions = {}): PosApi {
     billing: {
       // T-103 @ 746488d — server is the money authority (per-line tax, cgst floor/sgst rest, exact split shares).
       create: (input) => c.post("/bills", input),
+      update: (id, input, version) => c.patch(`/bills/${id}`, { ...input, version }),
       finalize: (id, version) => c.post(`/bills/${id}/finalize`, { version }),
       pay: (id, input) => c.post(`/bills/${id}/payments`, input),
+      refund: (paymentId, input) => c.post(`/payments/${paymentId}/refunds`, input),
+      void: (id, reason) => c.post(`/bills/${id}/void`, { reason }),
       get: (id) => c.get(`/bills/${id}`),
       receipt: (id) => c.get(`/bills/${id}/receipt`),
+    },
+    dayClose: {
+      get: async (businessDate = new Date().toISOString().slice(0, 10)) => c.get(`/day-close?outletId=${await outlet()}&businessDate=${businessDate}`),
+      close: async (businessDate, note) => c.post("/day-close", { outletId: await outlet(), businessDate, note }),
     },
   };
 }

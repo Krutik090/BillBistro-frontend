@@ -51,6 +51,12 @@ export interface Bill {
 /** tendered (cash) lets the server compute change; reference is required for non-cash modes. */
 export interface PaymentInput { mode: PaymentMode; amount: Money; tendered?: Money; reference?: string | null; idempotencyKey: string }
 export interface Payment { id: string; billId: string; mode: PaymentMode; status: PaymentStatus; amount: Money; tendered?: Money | null; change?: Money; due?: Money; reference?: string | null; createdAt: string }
+export interface RefundInput { amount: Money; reason: string; reference?: string | null; idempotencyKey: string }
+export interface Refund { id: string; paymentId: string; amount: Money; reason: string; reference?: string | null; createdAt?: string }
+export interface DayClose {
+  status: "OPEN" | "CLOSED"; businessDate?: string; closedAt?: string | null; note?: string | null;
+  totals: { bills: number; orders: number; grossSales: Money; discounts: Money; taxableSales: Money; cgst: Money; sgst: Money; taxTotal: Money; tips: Money; roundOff: Money; netSales: Money; collected: Money; refunded: Money; byMode: Record<string, { collected: Money; refunded: Money; count: number }>; voids: number; cashExpected: Money };
+}
 /** GET /v1/bills/:id/receipt — 80mm-ready. */
 export interface Receipt {
   business: { name: string; gstin?: string | null }; outlet: { name: string; address?: string | null; phone?: string | null };
@@ -117,10 +123,20 @@ export interface PosApi {
   };
   billing: {
     create(input: BillInput): Promise<Bill>;
+    /** DRAFT only: change discount / tip; server recomputes. */
+    update(billId: string, input: { discount?: Money; tip?: Money; discountNote?: string }, version?: number): Promise<Bill>;
     /** DRAFT → FINAL. Required before payments; stamps businessDate, order/table → BILLED. */
     finalize(billId: string, version?: number): Promise<Bill>;
     pay(billId: string, input: PaymentInput): Promise<Payment>;
+    refund(paymentId: string, input: RefundInput): Promise<Refund>;
+    /** Only when paid − refunded == 0; order → OPEN, table → OCCUPIED. */
+    void(billId: string, reason: string): Promise<Bill>;
     get(billId: string): Promise<Bill>;
     receipt(billId: string): Promise<Receipt>;
+  };
+  dayClose: {
+    get(businessDate?: string): Promise<DayClose>;
+    /** 409 while unpaid FINAL bills exist; afterwards finalize/pay on that date → 409. */
+    close(businessDate: string, note?: string): Promise<DayClose>;
   };
 }
