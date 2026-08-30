@@ -3,6 +3,7 @@
 import { createClient } from "./client";
 import { createRealApi } from "./real";
 import { allOptions } from "./types";
+import { priceLine } from "./mock";
 
 // Node 22 fetch has no cookie jar — keep cookies by hand.
 let cookie = "";
@@ -71,6 +72,11 @@ let ordersNote = "";
   const o1 = await api.orders.create({ type: "DINE_IN", tableId: free.id, guestCount: 2, clientKey: key, items: [line(a, 2, "L1"), line(b, 1, "L2")] });
   assert(o1.items.length === 2 && o1.items.find((i) => i.clientLineId === "L1")?.qty === 2, "clientLineId echoed");
   assert(o1.subtotal === o1.items.reduce((s, i) => s + i.lineTotal, 0) && o1.items.every((i) => i.lineTotal === i.unitPrice * i.qty), "server pricing consistent");
+  // client estimate (priceLine on the effective menu) must equal the server's re-pricing — otherwise the POS would show a drift warning
+  const est = [line(a, 2, "L1"), line(b, 1, "L2")].reduce((s, l) => s + priceLine(l.itemId === a.id ? a : b, l).lineTotal, 0);
+  assert(est === o1.subtotal, `client estimate ${est} == server subtotal ${o1.subtotal}`);
+  const estTax = [line(a, 2, "L1"), line(b, 1, "L2")].reduce((s, l) => { const p = priceLine(l.itemId === a.id ? a : b, l); return s + Math.round((p.lineTotal * p.taxRateBps) / 10000); }, 0);
+  assert(estTax === o1.taxTotal, `client tax ${estTax} == server tax ${o1.taxTotal}`);
   try {
   const o1b = await api.orders.create({ type: "DINE_IN", tableId: free.id, guestCount: 2, clientKey: key, items: [line(a, 2, "L1"), line(b, 1, "L2")] });
   assert(o1b.id === o1.id, "clientKey idempotent");
@@ -81,6 +87,12 @@ let ordersNote = "";
   assert(kot.kotNo && kot.itemIds.includes(l1.id), "KOT created with itemIds");
   const o2 = await api.orders.get(o1.id);
   assert(o2.items.find((i) => i.id === l1.id)?.kotId === kot.id && !o2.items.find((i) => i.clientLineId === "L2")?.kotId, "only sent line has kotId");
+  // KDS feed + status machine
+  const feed = await api.kots.list({ status: "PENDING" });
+  assert(feed.some((k) => k.id === kot.id && k.itemIds.includes(l1.id)), "KOT visible in KDS feed with itemIds");
+  const prep = await api.kots.setStatus(kot.id, "PREPARING"); assert(prep.status === "PREPARING", "KOT -> PREPARING");
+  let badKot = false; try { await api.kots.setStatus(kot.id, "SERVED"); } catch { badKot = true; } assert(badKot, "KOT skip to SERVED rejected");
+  assert((await api.kots.setStatus(kot.id, "READY")).status === "READY", "KOT -> READY");
   // full-list replace: keep L1 unchanged, change L2 qty, add L3
   const keep = { itemId: l1.itemId, qty: l1.qty, variantId: o2.items.find((i) => i.id === l1.id)!.variantId ?? null, modifierIds: req(a), clientLineId: l1.id };
   const o3 = await api.orders.replaceItems(o1.id, [keep, { ...line(b, 3, "L2") }, { ...line(a, 1, "L3") }], o2.version);
@@ -91,7 +103,7 @@ let ordersNote = "";
   assert(oc.status === "CANCELLED", "cancel");
   const freed = (await api.tables.list()).find((t) => t.id === free.id)!;
   assert(freed.status === "FREE", "cancel frees table");
-  ordersNote = `${o1.orderNo} on ${free.name}: 2 lines → KOT ${kot.kotNo} → replace(3) → 422/409 guarded → cancelled`;
+  ordersNote = `${o1.orderNo} on ${free.name}: 2 lines (client==server ₹${o1.subtotal / 100}) → KOT ${kot.kotNo} PENDING→PREPARING→READY → replace(3) → 422/409 guarded → cancelled`;
   } finally {
     // never leave a seeded table occupied by a smoke order
     const o = await api.orders.get(o1.id); if (o.status === "OPEN") await api.orders.cancel(o1.id, "smoke cleanup", o.version).catch(() => {});

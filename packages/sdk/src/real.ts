@@ -1,6 +1,6 @@
 // Real PosApi over Jim's NestJS API (phase1-backend, /v1). Endpoints that don't exist yet throw
 // NotImplementedError so hybrid mode can route them to the mock until T-101/T-102/T-103 land.
-import type { MenuCategory, MenuItem, ModifierGroup, PosApi, EffectiveMenu, ItemInput, Principal, FloorView, TableInfo, Outlet, Kot } from "./types";
+import type { MenuCategory, MenuItem, ModifierGroup, PosApi, EffectiveMenu, ItemInput, Principal, FloorView, TableInfo, Outlet, KotTicket } from "./types";
 import { createClient, type ApiClient } from "./client";
 
 export class NotImplementedError extends Error { constructor(what: string) { super(`${what} is not available on the API yet`); } }
@@ -8,6 +8,9 @@ export class NotImplementedError extends Error { constructor(what: string) { sup
 export interface RealApiOptions { client?: ApiClient; /** When set, POS reads GET /menu/outlets/:id/effective (schedules + outlet prices applied). */ outletId?: string | null }
 
 const ADDONS = "Add-ons";
+/** API kot rows carry items[]; derive itemIds + flatten order/table context. */
+const normKot = (k: KotTicket & { items?: { id: string }[]; order?: { orderNo?: string; tableRef?: string | null; table?: { code?: string } } }): KotTicket =>
+  ({ ...k, itemIds: k.itemIds ?? k.items?.map((i) => i.id) ?? [], orderNo: k.orderNo ?? k.order?.orderNo, tableRef: k.tableRef ?? k.order?.tableRef ?? k.order?.table?.code ?? null });
 const tableInfo = (s: { id: string; name: string }) => (t: FloorView["sections"][number]["tables"][number]): TableInfo =>
   ({ id: t.id, sectionId: s.id, section: s.name, name: t.code, seats: t.capacity, status: t.status, statusSince: t.statusSince ?? null, orderId: t.currentOrderId ?? null, posX: t.posX ?? null, posY: t.posY ?? null, version: t.version });
 
@@ -100,8 +103,12 @@ export function createRealApi(opts: RealApiOptions = {}): PosApi {
       create: async (input) => c.post("/orders", { ...input, outletId: input.outletId ?? (input.tableId ? undefined : await outlet()), tableId: input.tableId ?? undefined, tableRef: input.tableRef ?? undefined, notes: input.notes ?? undefined }),
       get: (id) => c.get(`/orders/${id}`),
       replaceItems: (id, items, version) => c.patch(`/orders/${id}/items`, { items, version }),
-      sendKot: async (orderId, orderItemIds, station) => { const k = await c.post<Kot & { items?: { id: string }[] }>(`/orders/${orderId}/kots`, { orderItemIds, station }); return { ...k, itemIds: k.itemIds ?? k.items?.map((i) => i.id) ?? orderItemIds }; },
+      sendKot: async (orderId, orderItemIds, station) => { const k = normKot(await c.post<KotTicket>(`/orders/${orderId}/kots`, { orderItemIds, station })); return { ...k, itemIds: k.itemIds.length ? k.itemIds : orderItemIds }; },
       cancel: (id, reason, version) => c.post(`/orders/${id}/cancel`, { reason, version }),
+    },
+    kots: {
+      list: async (f = {}) => { const q = new URLSearchParams({ outletId: await outlet(), ...(f.status ? { status: f.status } : {}), ...(f.station ? { station: f.station } : {}) }); return (await c.get<KotTicket[]>(`/kots?${q}`)).map(normKot); },
+      setStatus: async (id, status) => normKot(await c.patch<KotTicket>(`/kots/${id}/status`, { status })),
     },
     billing: {
       create: notYet("POST /bills (T-103)"),

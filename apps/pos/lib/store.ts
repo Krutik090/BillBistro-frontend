@@ -14,6 +14,8 @@ interface PosState {
   type: OrderType; tableId: string | null; tableRef: string | null; covers: number;
   lines: CartLine[]; discount: Discount; tip: number;
   orderId: string | null; orderNo: string | null; orderVersion: number | null; kots: Order["kots"]; syncing: boolean;
+  /** Authoritative totals from the last server sync; null while the cart has unsynced edits (client math shown instead). */
+  serverTotals: { subtotal: number; taxTotal: number; total: number; version: number } | null;
   bill: Bill | null; splitCount: number; splitIndex: number;
   held: HeldOrder[];
   sheet: Sheet; sheetItem: MenuItem | null; editingLineId: string | null;
@@ -31,7 +33,7 @@ interface PosState {
   reset: () => void; notify: (msg: string | null) => void;
 }
 
-const empty = { type: "DINE_IN" as OrderType, tableId: null, tableRef: null, covers: 0, lines: [], discount: null, tip: 0, orderId: null, orderNo: null, orderVersion: null, kots: [], bill: null, splitCount: 1, splitIndex: 0 };
+const empty = { type: "DINE_IN" as OrderType, tableId: null, tableRef: null, covers: 0, lines: [], discount: null, tip: 0, orderId: null, orderNo: null, orderVersion: null, kots: [], serverTotals: null, bill: null, splitCount: 1, splitIndex: 0 };
 
 export const usePos = create<PosState>()(
   persist(
@@ -45,14 +47,15 @@ export const usePos = create<PosState>()(
           const key = (l: CartLine) => `${l.item.id}|${l.variantId}|${[...l.modifierIds].sort().join(",")}|${l.notes ?? ""}`;
           const k = `${item.id}|${variantId}|${[...modifierIds].sort().join(",")}|${notes ?? ""}`;
           const existing = s.lines.find((l) => !l.kotId && key(l) === k);
-          if (existing) return { lines: s.lines.map((l) => (l === existing ? { ...l, qty: l.qty + qty } : l)) };
-          return { lines: [...s.lines, { lineId: uid(), item, variantId, modifierIds, qty, notes }] };
+          if (existing) return { serverTotals: null, lines: s.lines.map((l) => (l === existing ? { ...l, qty: l.qty + qty } : l)) };
+          return { serverTotals: null, lines: [...s.lines, { lineId: uid(), item, variantId, modifierIds, qty, notes }] };
         }),
-      updateLine: (lineId, patch) => set((s) => ({ lines: s.lines.map((l) => (l.lineId === lineId ? { ...l, ...patch } : l)).filter((l) => l.qty > 0) })),
-      removeLine: (lineId) => set((s) => ({ lines: s.lines.filter((l) => l.lineId !== lineId) })),
+      updateLine: (lineId, patch) => set((s) => ({ serverTotals: null, lines: s.lines.map((l) => (l.lineId === lineId ? { ...l, ...patch } : l)).filter((l) => l.qty > 0) })),
+      removeLine: (lineId) => set((s) => ({ serverTotals: null, lines: s.lines.filter((l) => l.lineId !== lineId) })),
       setDiscount: (discount) => set({ discount }), setTip: (tip) => set({ tip }),
       setOrder: (o) => set((s) => ({
         orderId: o?.id ?? null, orderNo: o?.orderNo ?? null, orderVersion: o?.version ?? null, kots: o?.kots ?? [],
+        serverTotals: o ? { subtotal: o.subtotal, taxTotal: o.taxTotal, total: o.total, version: o.version } : null,
         lines: o ? s.lines.map((l) => { const srv = o.items.find((i) => i.clientLineId === l.lineId || i.id === l.serverId || i.id === l.lineId); return srv ? { ...l, serverId: srv.id, kotId: srv.kotId ?? l.kotId ?? null } : l; }) : s.lines,
       })),
       setSyncing: (syncing) => set({ syncing }),

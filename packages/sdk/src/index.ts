@@ -21,5 +21,5 @@ export function createPosApi(mode: ApiMode = (process.env.NEXT_PUBLIC_API_MODE a
   const real = createRealApi();
   if (mode === "real") return real;
   const mock = createMockApi();
-  return { mode: "hybrid", auth: real.auth, outlets: real.outlets, menu: real.menu, tables: real.tables, orders: real.orders, billing: mock.billing };
+  return { mode: "hybrid", auth: real.auth, outlets: real.outlets, menu: real.menu, tables: real.tables, orders: real.orders, kots: real.kots, billing: mock.billing };
 }

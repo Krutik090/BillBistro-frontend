@@ -156,6 +156,15 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
         return structuredClone(kot);
       },
     },
+    kots: {
+      list: async (f = {}) => { await wait(latency / 2); return [...orders.values()].flatMap((o) => o.kots.filter((k) => (!f.status || k.status === f.status) && (!f.station || k.station === f.station)).map((k) => ({ ...k, orderNo: o.orderNo, tableRef: o.tableRef, items: o.items.filter((i) => k.itemIds.includes(i.id)).map((i) => ({ id: i.id, name: i.name, qty: i.qty, variantName: i.variantName, notes: i.notes })) }))); },
+      async setStatus(id, status) {
+        await wait(latency / 2);
+        const legal: Record<string, string[]> = { PENDING: ["PREPARING", "CANCELLED"], PREPARING: ["READY", "CANCELLED"], READY: ["SERVED", "PREPARING"], SERVED: [], CANCELLED: [] };
+        for (const o of orders.values()) { const k = o.kots.find((x) => x.id === id); if (k) { if (!legal[k.status].includes(status)) throw new Error(`Illegal KOT transition ${k.status} → ${status} (422)`); k.status = status; return { ...k, orderNo: o.orderNo, tableRef: o.tableRef }; } }
+        throw new Error("KOT not found");
+      },
+    },
     billing: {
       async create(input) {
         await wait(latency);

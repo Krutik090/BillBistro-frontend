@@ -12,7 +12,16 @@ export function Cart() {
   const s = usePos();
   const api = useApi();
   const sync = useSyncOrder();
-  const t = computeTotals(s.lines, s.discount, s.tip);
+  const client = computeTotals(s.lines, s.discount, s.tip);
+  // Server totals are authoritative once synced (order re-priced by the API); client math only bridges unsynced edits.
+  const t = React.useMemo(() => {
+    const sv = s.serverTotals; if (!sv) return client;
+    const factor = sv.subtotal ? 1 - client.discountAmt / sv.subtotal : 1;
+    const taxTotal = Math.round(sv.taxTotal * factor);
+    const raw = sv.subtotal - client.discountAmt + taxTotal + client.tip; const total = Math.round(raw / 100) * 100;
+    return { ...client, subtotal: sv.subtotal, taxTotal, taxByRate: new Map([...client.taxByRate].map(([bps, amt]) => [bps, client.taxTotal ? Math.round((taxTotal * amt) / client.taxTotal) : amt])), roundOff: total - raw, total };
+  }, [s.serverTotals, client]);
+  const drift = s.serverTotals && s.serverTotals.subtotal !== client.subtotal;
   const unsent = s.lines.filter((l) => !l.kotId);
   const [busy, setBusy] = React.useState<null | "kot" | "bill">(null);
 
@@ -56,7 +65,8 @@ export function Cart() {
       </ul>
 
       <div className="flex flex-col gap-1.5 bg-surface-raised px-5 py-3 text-sm">
-        <Row k={`Subtotal · ${t.qty} item${t.qty === 1 ? "" : "s"}`} v={inr(t.subtotal)} />
+        <Row k={`Subtotal · ${t.qty} item${t.qty === 1 ? "" : "s"}${s.serverTotals ? " · server" : ""}`} v={inr(t.subtotal)} />
+        {drift && <Row k="Client estimate differed" v={inr(client.subtotal)} cls="text-warning" />}
         {t.discountAmt > 0 && <Row k={`Discount${s.discount?.kind === "percent" ? ` ${s.discount.value}%` : ""}`} v={`−${inr(t.discountAmt)}`} cls="text-success" />}
         {[...t.taxByRate].map(([bps, amt]) => <React.Fragment key={bps}><Row k={`CGST ${bps / 200}%`} v={inr(Math.round(amt / 2))} /><Row k={`SGST ${bps / 200}%`} v={inr(amt - Math.round(amt / 2))} /></React.Fragment>)}
         {t.tip > 0 && <Row k="Tip" v={inr(t.tip)} />}

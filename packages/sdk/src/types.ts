@@ -36,6 +36,8 @@ export interface OrderInput { type: OrderType; outletId?: string; tableId?: stri
 export interface OrderItem { id: string; clientLineId?: string | null; itemId: string; name: string; variantId?: string | null; variantName?: string | null; modifiers?: { optionId: string; name: string; price: Money }[]; qty: number; unitPrice: Money; taxRateBps: number; lineTotal: Money; notes?: string | null; kotId?: string | null }
 export interface Order { id: string; orderNo: string; type: OrderType; status: OrderStatus; tableId?: string | null; tableRef?: string | null; table?: { id: string; code: string; status: TableStatus } | null; guestCount?: number | null; subtotal: Money; taxTotal: Money; discount: Money; total: Money; version: number; items: OrderItem[]; kots: Kot[]; createdAt: string }
 export interface Kot { id: string; orderId?: string; kotNo: string; status: KotStatus; station?: string | null; itemIds: string[]; createdAt?: string }
+/** KDS feed row (GET /v1/kots): ticket + order/table context + lines with modifiers. */
+export interface KotTicket extends Kot { orderNo?: string; tableRef?: string | null; items?: { id: string; name: string; qty: number; variantName?: string | null; notes?: string | null; modifiers?: { name: string }[] }[] }
 
 export interface BillInput { orderId: string; discount?: Money; tip?: Money; splitOf?: { index: number; count: number } }
 export interface Bill { id: string; orderId: string; billNo: string; status: BillStatus; subtotal: Money; taxTotal: Money; discount: Money; tip: Money; roundOff: Money; total: Money; payments: Payment[]; finalizedAt?: string | null; createdAt: string }
@@ -91,6 +93,12 @@ export interface PosApi {
     sendKot(orderId: string, orderItemIds: string[], station?: string): Promise<Kot>;
     /** Void the order: open KOTs cancelled, table freed. */
     cancel(id: string, reason: string, version?: number): Promise<Order>;
+  };
+  kots: {
+    /** KDS feed for the current outlet. */
+    list(filter?: { status?: KotStatus; station?: string }): Promise<KotTicket[]>;
+    /** PENDING→PREPARING→READY→SERVED (READY→PREPARING allowed; CANCELLED from PENDING/PREPARING). */
+    setStatus(id: string, status: KotStatus): Promise<KotTicket>;
   };
   billing: {
     create(input: BillInput): Promise<Bill>;
