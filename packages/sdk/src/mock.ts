@@ -170,12 +170,16 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
         await wait(latency);
         const o = orders.get(input.orderId); if (!o) throw new Error("Order not found");
         const discount = Math.min(input.discount ?? 0, o.subtotal);
-        const share = input.splitOf ? 1 / input.splitOf.count : 1;
-        const subtotal = Math.round(o.subtotal * share);
-        const disc = Math.round(discount * share);
+        // Split shares: round(x/count) per component; the LAST share absorbs the paise remainder so shares sum exactly (spec + server).
+        const { index, count } = input.splitOf ?? { index: 0, count: 1 };
+        const shareOf = (x: number) => (index < count - 1 ? Math.round(x / count) : x - Math.round(x / count) * (count - 1));
+        const subtotal = shareOf(o.subtotal);
+        const disc = shareOf(discount);
         const taxable = subtotal - disc;
-        const taxTotal = Math.round(o.items.reduce((s, l) => s + (l.lineTotal * share * (1 - discount / Math.max(o.subtotal, 1)) * l.taxRateBps) / 10000, 0));
-        const tip = Math.round((input.tip ?? 0) * share);
+        // Spec + server: tax is rounded PER LINE — Σ round(lineShare * (1 - discount/subtotal) * bps / 10000) — never once over the sum.
+        const factor = 1 - discount / Math.max(o.subtotal, 1);
+        const taxTotal = o.items.reduce((s, l) => s + Math.round((shareOf(l.lineTotal) * factor * l.taxRateBps) / 10000), 0);
+        const tip = shareOf(input.tip ?? 0);
         const raw = taxable + taxTotal + tip;
         const total = Math.round(raw / 100) * 100;
         const b: Bill = { id: uid(), orderId: o.id, billNo: `B-${++billSeq}${input.splitOf ? `/${input.splitOf.index + 1}` : ""}`, status: "DRAFT", subtotal, taxTotal, discount: disc, tip, roundOff: total - raw, total, payments: [], createdAt: now() };
