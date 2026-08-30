@@ -31,7 +31,7 @@ export function TableSheet() {
             <div className="grid grid-cols-4 gap-2">
               {tables.filter((t) => t.section === sec).map((t) => (
                 <button key={t.id} onClick={() => pick("DINE_IN", t.name, t.seats)}
-                  className={cn("flex h-16 flex-col items-center justify-center rounded-lg border text-sm font-semibold", current === t.name ? "border-primary bg-primary-soft" : t.status === "FREE" ? "border-border bg-surface hover:border-border-strong" : t.status === "OCCUPIED" ? "border-warning/50 bg-warning/10 text-warning" : "border-info/50 bg-info/10 text-info")}>
+                  className={cn("flex h-16 flex-col items-center justify-center rounded-lg border text-sm font-semibold", current === t.name ? "border-primary bg-primary-soft" : t.status === "FREE" ? "border-border bg-surface hover:border-border-strong" : t.status === "OCCUPIED" ? "border-warning/50 bg-warning/10 text-warning" : t.status === "BILLED" ? "border-info/50 bg-info/10 text-info" : t.status === "RESERVED" ? "border-chart-3/50 bg-chart-3/10 text-chart-3" : "border-border bg-surface-overlay text-subtle")}>
                   {t.name}<span className="text-[10px] font-medium opacity-70">{t.status === "FREE" ? `${t.seats} seats` : t.status.toLowerCase()}</span>
                 </button>
               ))}

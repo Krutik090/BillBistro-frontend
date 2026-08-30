@@ -36,4 +36,21 @@ assert(allOptions(updated).length === 2 && allOptions(updated).find((o) => o.nam
 await api.menu.deleteItem(created.id);
 const after = await api.menu.items();
 assert(after.length === before.length, "soft-deleted item gone from list");
-console.log("real API smoke OK:", { categories: cats.length, items: after.length, created: created.name });
+
+// Floor (T-101) — needs an outlet id (no outlets endpoint yet): OUTLET_ID=<uuid> pnpm --filter @billbistro/sdk smoke:real
+let floor = "skipped (set OUTLET_ID)";
+if (process.env.OUTLET_ID) {
+  const fapi = createRealApi({ client: createClient({ fetch: jarFetch }), outletId: process.env.OUTLET_ID });
+  const tables = await fapi.tables.list();
+  assert(tables.length > 0 && tables[0].section && tables[0].name, "floor tables flattened");
+  const free = tables.find((t) => t.status === "FREE")!;
+  const occ = await fapi.tables.setStatus(free.id, "OCCUPIED", free.version);
+  assert(occ.status === "OCCUPIED" && occ.version === (free.version ?? 0) + 1, "status transition + version bump");
+  let illegal = false; try { await fapi.tables.setStatus(free.id, "RESERVED", occ.version); } catch { illegal = true; } assert(illegal, "illegal transition rejected (422)");
+  let stale = false; try { await fapi.tables.setStatus(free.id, "FREE", free.version); } catch { stale = true; } assert(stale, "stale version rejected (409)");
+  await fapi.tables.setStatus(free.id, "FREE", occ.version);
+  const eff = await fapi.menu.items();
+  assert(eff.every((i) => typeof i.effectivePrice === "number"), "effective menu carries effectivePrice");
+  floor = `${tables.length} tables in ${new Set(tables.map((t) => t.section)).size} sections; effective menu ${eff.length} items`;
+}
+console.log("real API smoke OK:", { categories: cats.length, items: after.length, created: created.name, floor });

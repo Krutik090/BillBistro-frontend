@@ -1,6 +1,6 @@
 // Real PosApi over Jim's NestJS API (phase1-backend, /v1). Endpoints that don't exist yet throw
 // NotImplementedError so hybrid mode can route them to the mock until T-101/T-102/T-103 land.
-import type { MenuCategory, MenuItem, ModifierGroup, PosApi, EffectiveMenu, ItemInput, Principal } from "./types";
+import type { MenuCategory, MenuItem, ModifierGroup, PosApi, EffectiveMenu, ItemInput, Principal, FloorView, TableInfo } from "./types";
 import { createClient, type ApiClient } from "./client";
 
 export class NotImplementedError extends Error { constructor(what: string) { super(`${what} is not available on the API yet`); } }
@@ -8,6 +8,8 @@ export class NotImplementedError extends Error { constructor(what: string) { sup
 export interface RealApiOptions { client?: ApiClient; /** When set, POS reads GET /menu/outlets/:id/effective (schedules + outlet prices applied). */ outletId?: string | null }
 
 const ADDONS = "Add-ons";
+const tableInfo = (s: { id: string; name: string }) => (t: FloorView["sections"][number]["tables"][number]): TableInfo =>
+  ({ id: t.id, sectionId: s.id, section: s.name, name: t.code, seats: t.capacity, status: t.status, statusSince: t.statusSince ?? null, orderId: t.currentOrderId ?? null, posX: t.posX ?? null, posY: t.posY ?? null, version: t.version });
 
 export function createRealApi(opts: RealApiOptions = {}): PosApi {
   const c = opts.client ?? createClient();
@@ -47,7 +49,7 @@ export function createRealApi(opts: RealApiOptions = {}): PosApi {
     }
     return getItem(id);
   }
-  const scalars = ({ variants, modifiers, sku, description, station, ...rest }: Partial<ItemInput>) => ({ ...rest, sku: sku ?? undefined, description: description ?? undefined, station: station ?? undefined });
+  const scalars = ({ variants, modifiers, modifierGroupIds, sku, description, station, ...rest }: Partial<ItemInput>) => ({ ...rest, sku: sku ?? undefined, description: description ?? undefined, station: station ?? undefined });
 
   return {
     mode: "real",
@@ -65,21 +67,31 @@ export function createRealApi(opts: RealApiOptions = {}): PosApi {
       createCategory: (input) => c.post("/menu/categories", input),
       updateCategory: (id, input) => c.patch(`/menu/categories/${id}`, input),
       deleteCategory: async (id) => { await c.del(`/menu/categories/${id}`); },
-      // POST /menu/items accepts nested variants[] + inline modifiers[] (Jim 4059c8b) — one round-trip.
+      // POST /menu/items accepts nested variants[] + inline modifiers[] + modifierGroupIds[] (Jim 4059c8b) — one round-trip.
       createItem: async (input) => {
-        const created = await c.post<MenuItem>("/menu/items", { ...scalars(input), variants: input.variants?.map(({ id: _i, ...v }) => v), modifiers: input.modifiers?.map(({ id: _i, ...m }) => m) });
+        const created = await c.post<MenuItem>("/menu/items", { ...scalars(input), variants: input.variants?.map(({ id: _i, ...v }) => v), modifiers: input.modifiers?.map(({ id: _i, ...m }) => m), modifierGroupIds: input.modifierGroupIds });
         return getItem(created.id);
       },
       updateItem: async (id, input) => { const s = scalars(input); if (Object.keys(s).length) await c.patch(`/menu/items/${id}`, s); return syncNested(id, input); },
       deleteItem: async (id) => { await c.del(`/menu/items/${id}`); },
     },
-    tables: { list: notYet("tables API (T-101)") },
+    tables: {
+      list: async () => {
+        if (!outletId) throw new Error("NEXT_PUBLIC_OUTLET_ID is required for the floor view (GET /v1/floor/outlets/:outletId)");
+        const floor = await c.get<FloorView>(`/floor/outlets/${outletId}`);
+        return floor.sections.flatMap((s) => s.tables.map(tableInfo(s)));
+      },
+      setStatus: async (id, status, version) => {
+        const t = await c.post<FloorView["sections"][number]["tables"][number] & { sectionId: string; section?: { name: string } }>(`/floor/tables/${id}/status`, { status, version });
+        return tableInfo({ id: t.sectionId, name: t.section?.name ?? "" })(t);
+      },
+    },
     orders: {
-      // POST /orders exists (T-102 in progress) — body shape to be confirmed with Jim's CreateOrder zod schema.
+      // Contract confirmed with Jim (T-102, landing): POST /orders {type, tableRef, items[{itemId, qty, variantId?, modifierIds?, notes?, clientLineId?}], clientKey}
       create: (input) => c.post("/orders", input),
       get: (id) => c.get(`/orders/${id}`),
-      replaceItems: notYet("PATCH /orders/:id/items (T-102)"),
-      sendKot: notYet("POST /orders/:id/kots (T-102)"),
+      replaceItems: (id, items, version) => c.patch(`/orders/${id}/items`, { items, version }),
+      sendKot: (orderId, orderItemIds, station) => c.post(`/orders/${orderId}/kots`, { orderItemIds, station }),
     },
     billing: {
       create: notYet("POST /bills (T-103)"),

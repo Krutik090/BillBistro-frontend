@@ -23,12 +23,16 @@ export type BillStatus = "DRAFT" | "FINAL" | "VOID";
 export type PaymentMode = "CASH" | "UPI" | "CARD" | "WALLET" | "OTHER";
 export type PaymentStatus = "PENDING" | "CAPTURED" | "FAILED" | "REFUNDED";
 
-export interface TableInfo { id: string; section: string; name: string; seats: number; status: "FREE" | "OCCUPIED" | "BILLED"; orderId?: string | null }
+export type TableStatus = "FREE" | "OCCUPIED" | "RESERVED" | "BILLED" | "CLEANING" | "BLOCKED";
+/** Flattened from GET /v1/floor/outlets/:outletId (sections[].tables[]). name = table code. */
+export interface TableInfo { id: string; sectionId: string; section: string; name: string; seats: number; status: TableStatus; statusSince?: string | null; orderId?: string | null; posX?: number | null; posY?: number | null; version?: number }
+export interface FloorView { counts: Record<string, number>; sections: { id: string; name: string; tables: { id: string; code: string; capacity: number; status: TableStatus; statusSince?: string | null; currentOrderId?: string | null; posX?: number | null; posY?: number | null; version: number }[] }[] }
 
 /** modifierIds = ModifierOption ids (across groups). */
 export interface OrderItemInput { itemId: string; qty: number; variantId?: string | null; modifierIds?: string[]; notes?: string | null; clientLineId?: string }
 export interface OrderInput { type: OrderType; tableRef?: string | null; items: OrderItemInput[]; clientKey?: string }
-export interface OrderItem { id: string; itemId: string; name: string; variantName?: string | null; qty: number; unitPrice: Money; taxRateBps: number; lineTotal: Money; notes?: string | null; kotId?: string | null }
+/** Server echoes clientLineId so optimistic cart lines reconcile by it (id is server-generated). */
+export interface OrderItem { id: string; clientLineId?: string | null; itemId: string; name: string; variantName?: string | null; qty: number; unitPrice: Money; taxRateBps: number; lineTotal: Money; notes?: string | null; kotId?: string | null }
 export interface Order { id: string; orderNo: string; type: OrderType; status: OrderStatus; tableRef?: string | null; subtotal: Money; taxTotal: Money; discount: Money; total: Money; version: number; items: OrderItem[]; kots: Kot[]; createdAt: string }
 export interface Kot { id: string; orderId: string; kotNo: string; status: KotStatus; station?: string | null; itemIds: string[]; createdAt: string }
 
@@ -41,8 +45,10 @@ export interface CategoryInput { name: string; description?: string; sortOrder?:
 export interface ItemInput {
   categoryId: string; name: string; basePrice: Money; taxRateBps?: number; isVeg?: boolean; isAvailable?: boolean; sku?: string | null; description?: string | null; station?: string | null;
   variants?: { id?: string; name: string; priceDelta: Money; isDefault?: boolean }[];
-  /** Simple add-ons: options of the item's default "Add-ons" group (min 0 / max all). Full group editing is a later phase. */
+  /** Simple add-ons (API sugar): options of the item's "<item> add-ons" group (min 0 / max all). */
   modifiers?: { id?: string; name: string; price: Money }[];
+  /** Attach existing shared modifier groups (create only; PUT items/:id/modifier-groups on update). */
+  modifierGroupIds?: string[];
 }
 
 export interface LoginInput { tenantSlug: string; email: string; password: string }
@@ -61,11 +67,15 @@ export interface PosApi {
     updateItem(id: string, input: Partial<ItemInput>): Promise<MenuItem>;
     deleteItem(id: string): Promise<void>;
   };
-  tables: { list(): Promise<TableInfo[]> };
+  tables: {
+    list(): Promise<TableInfo[]>;
+    /** Legal transitions enforced server-side (422 illegal, 409 stale version). */
+    setStatus(id: string, status: TableStatus, version?: number): Promise<TableInfo>;
+  };
   orders: {
     create(input: OrderInput): Promise<Order>;
     get(id: string): Promise<Order>;
-    replaceItems(id: string, items: OrderItemInput[]): Promise<Order>;
+    replaceItems(id: string, items: OrderItemInput[], version?: number): Promise<Order>;
     sendKot(orderId: string, orderItemIds: string[], station?: string): Promise<Kot>;
   };
   billing: {

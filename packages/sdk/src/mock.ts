@@ -1,6 +1,6 @@
 // In-memory typed mock of PosApi. Same money math contract as the API (int paise, GST bps).
 // Latency is simulated so optimistic UI paths are exercised.
-import type { Bill, BillInput, ItemInput, Kot, MenuCategory, MenuItem, Order, OrderInput, OrderItemInput, Payment, PaymentInput, PosApi, Principal, TableInfo } from "./types";
+import type { Bill, BillInput, ItemInput, Kot, MenuCategory, MenuItem, Order, OrderInput, OrderItemInput, Payment, PaymentInput, PosApi, Principal, TableInfo, TableStatus } from "./types";
 import { allOptions, itemPrice } from "./types";
 
 const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -34,12 +34,17 @@ export const MOCK_ITEMS: MenuItem[] = seeds.map(([id, categoryId, name, rupees, 
   modifierGroups: addons.length ? [{ id: `${id}:g`, name: "Add-ons", minSelect: 0, maxSelect: addons.length, options: addons.map(([mn, p]) => ({ id: `${id}:m:${mn}`, groupId: `${id}:g`, name: mn, price: p * 100 })) }] : [],
 }));
 
-const table = (id: string, section: string, name: string, seats: number, status: TableInfo["status"] = "FREE"): TableInfo => ({ id, section, name, seats, status });
+const table = (id: string, section: string, name: string, seats: number, status: TableStatus = "FREE"): TableInfo => ({ id, sectionId: `s-${section.toLowerCase().replace(/\s+/g, "-")}`, section, name, seats, status, statusSince: now(), orderId: null, version: 1 });
 export const MOCK_TABLES: TableInfo[] = [
   table("t1", "Main hall", "T1", 2), table("t2", "Main hall", "T2", 4, "OCCUPIED"), table("t3", "Main hall", "T3", 4), table("t4", "Main hall", "T4", 4),
-  table("t5", "Main hall", "T5", 6, "BILLED"), table("t6", "Main hall", "T6", 2), table("t7", "Rooftop", "R1", 4, "OCCUPIED"), table("t8", "Rooftop", "R2", 4),
-  table("t9", "Rooftop", "R3", 8), table("t10", "AC room", "A1", 4), table("t11", "AC room", "A2", 6), table("t12", "AC room", "A3", 2),
+  table("t5", "Main hall", "T5", 6, "BILLED"), table("t6", "Main hall", "T6", 2, "CLEANING"), table("t7", "Rooftop", "R1", 4, "OCCUPIED"), table("t8", "Rooftop", "R2", 4, "RESERVED"),
+  table("t9", "Rooftop", "R3", 8), table("t10", "AC room", "A1", 4), table("t11", "AC room", "A2", 6, "BLOCKED"), table("t12", "AC room", "A3", 2),
 ];
+/** Mirrors Jim's floor status machine (T-101). */
+export const TABLE_TRANSITIONS: Record<TableStatus, TableStatus[]> = {
+  FREE: ["OCCUPIED", "RESERVED", "BLOCKED", "CLEANING"], RESERVED: ["OCCUPIED", "FREE"], OCCUPIED: ["BILLED", "FREE", "CLEANING"],
+  BILLED: ["CLEANING", "FREE"], CLEANING: ["FREE", "BLOCKED"], BLOCKED: ["FREE"],
+};
 const MOCK_PRINCIPAL: Principal = { userId: "mock-user", tenantId: "mock-tenant", roles: ["owner"], permissions: ["menu.read", "menu.write", "orders.write", "bills.write", "payments.write"] };
 
 /** Pure pricing — shared contract with the API (T-102): unit = price + variant + options; tax per line, half CGST/half SGST. */
@@ -57,6 +62,7 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
   const bills = new Map<string, Bill>();
   let orderSeq = 1041, kotSeq = 17, billSeq = 1041;
   // Menu is mutable per api instance (menu management UI edits it).
+  const tables: TableInfo[] = structuredClone(MOCK_TABLES);
   const categories: MenuCategory[] = structuredClone(MOCK_CATEGORIES);
   const menuItems: MenuItem[] = structuredClone(MOCK_ITEMS);
   const itemById = new Map(menuItems.map((i) => [i.id, i]));
@@ -76,7 +82,7 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
       const item = itemById.get(input.itemId);
       if (!item) throw new Error(`Unknown item ${input.itemId}`);
       const prev = existing?.items.find((e) => e.id === input.clientLineId);
-      return { id: input.clientLineId ?? uid(), itemId: item.id, qty: input.qty, notes: input.notes ?? null, kotId: prev?.kotId ?? null, ...priceLine(item, input) };
+      return { id: input.clientLineId ?? uid(), clientLineId: input.clientLineId ?? null, itemId: item.id, qty: input.qty, notes: input.notes ?? null, kotId: prev?.kotId ?? null, ...priceLine(item, input) };
     });
   const totals = (o: Order) => {
     o.subtotal = o.items.reduce((s, l) => s + l.lineTotal, 0);
@@ -102,7 +108,17 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
       async updateItem(id, input) { await wait(latency); const it = itemById.get(id); if (!it) throw new Error("Item not found"); return structuredClone(applyItem(it, input)); },
       async deleteItem(id) { await wait(latency); const i = menuItems.findIndex((x) => x.id === id); if (i >= 0) menuItems.splice(i, 1); itemById.delete(id); },
     },
-    tables: { list: async () => (await wait(latency), MOCK_TABLES.map((t) => ({ ...t }))) },
+    tables: {
+      list: async () => (await wait(latency), tables.map((t) => ({ ...t }))),
+      async setStatus(id, status, version) {
+        await wait(latency);
+        const t = tables.find((x) => x.id === id); if (!t) throw new Error("Table not found");
+        if (version !== undefined && version !== t.version) throw new Error("Stale table version (409)");
+        if (!TABLE_TRANSITIONS[t.status].includes(status)) throw new Error(`Illegal transition ${t.status} → ${status} (422)`);
+        t.status = status; t.statusSince = now(); t.version = (t.version ?? 1) + 1; if (status === "FREE") t.orderId = null;
+        return { ...t };
+      },
+    },
     orders: {
       async create(input) {
         await wait(latency);

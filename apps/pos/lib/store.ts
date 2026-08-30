@@ -13,7 +13,7 @@ export interface HeldOrder { id: string; label: string; heldAt: string; type: Or
 interface PosState {
   type: OrderType; tableRef: string | null; covers: number;
   lines: CartLine[]; discount: Discount; tip: number;
-  orderId: string | null; orderNo: string | null; kots: Order["kots"]; syncing: boolean;
+  orderId: string | null; orderNo: string | null; orderVersion: number | null; kots: Order["kots"]; syncing: boolean;
   bill: Bill | null; splitCount: number; splitIndex: number;
   held: HeldOrder[];
   sheet: Sheet; sheetItem: MenuItem | null; editingLineId: string | null;
@@ -31,7 +31,7 @@ interface PosState {
   reset: () => void; notify: (msg: string | null) => void;
 }
 
-const empty = { type: "DINE_IN" as OrderType, tableRef: null, covers: 0, lines: [], discount: null, tip: 0, orderId: null, orderNo: null, kots: [], bill: null, splitCount: 1, splitIndex: 0 };
+const empty = { type: "DINE_IN" as OrderType, tableRef: null, covers: 0, lines: [], discount: null, tip: 0, orderId: null, orderNo: null, orderVersion: null, kots: [], bill: null, splitCount: 1, splitIndex: 0 };
 
 export const usePos = create<PosState>()(
   persist(
@@ -52,8 +52,8 @@ export const usePos = create<PosState>()(
       removeLine: (lineId) => set((s) => ({ lines: s.lines.filter((l) => l.lineId !== lineId) })),
       setDiscount: (discount) => set({ discount }), setTip: (tip) => set({ tip }),
       setOrder: (o) => set((s) => ({
-        orderId: o?.id ?? null, orderNo: o?.orderNo ?? null, kots: o?.kots ?? [],
-        lines: o ? s.lines.map((l) => { const srv = o.items.find((i) => i.id === l.serverId || i.id === l.lineId); return srv ? { ...l, serverId: srv.id, kotId: srv.kotId ?? l.kotId ?? null } : l; }) : s.lines,
+        orderId: o?.id ?? null, orderNo: o?.orderNo ?? null, orderVersion: o?.version ?? null, kots: o?.kots ?? [],
+        lines: o ? s.lines.map((l) => { const srv = o.items.find((i) => i.clientLineId === l.lineId || i.id === l.serverId || i.id === l.lineId); return srv ? { ...l, serverId: srv.id, kotId: srv.kotId ?? l.kotId ?? null } : l; }) : s.lines,
       })),
       setSyncing: (syncing) => set({ syncing }),
       setBill: (bill) => set({ bill }), setSplit: (splitCount, splitIndex) => set({ splitCount, splitIndex }),
@@ -63,6 +63,6 @@ export const usePos = create<PosState>()(
       reset: () => set({ ...empty, sheet: null, sheetItem: null, editingLineId: null }),
       notify: (toast) => set({ toast }),
     }),
-    { name: "bb-pos-v1", partialize: (s) => ({ held: s.held, lines: s.lines, tableRef: s.tableRef, type: s.type, covers: s.covers, discount: s.discount, tip: s.tip, orderId: s.orderId, orderNo: s.orderNo, kots: s.kots }) },
+    { name: "bb-pos-v1", partialize: (s) => ({ held: s.held, lines: s.lines, tableRef: s.tableRef, type: s.type, covers: s.covers, discount: s.discount, tip: s.tip, orderId: s.orderId, orderNo: s.orderNo, orderVersion: s.orderVersion, kots: s.kots }) },
   ),
 );
