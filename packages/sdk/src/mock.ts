@@ -1,6 +1,6 @@
 // In-memory typed mock of PosApi. Same money math contract as the API (int paise, GST bps).
 // Latency is simulated so optimistic UI paths are exercised.
-import type { Bill, BillInput, ItemInput, Kot, MenuCategory, MenuItem, Order, OrderInput, OrderItemInput, Payment, PaymentInput, PosApi, Principal, TableInfo, TableStatus } from "./types";
+import type { Bill, BillInput, ItemInput, Kot, MenuCategory, MenuItem, Order, OrderInput, OrderItemInput, Outlet, Payment, PaymentInput, PosApi, Principal, TableInfo, TableStatus } from "./types";
 import { allOptions, itemPrice } from "./types";
 
 const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -45,7 +45,8 @@ export const TABLE_TRANSITIONS: Record<TableStatus, TableStatus[]> = {
   FREE: ["OCCUPIED", "RESERVED", "BLOCKED", "CLEANING"], RESERVED: ["OCCUPIED", "FREE"], OCCUPIED: ["BILLED", "FREE", "CLEANING"],
   BILLED: ["CLEANING", "FREE"], CLEANING: ["FREE", "BLOCKED"], BLOCKED: ["FREE"],
 };
-const MOCK_PRINCIPAL: Principal = { userId: "mock-user", tenantId: "mock-tenant", roles: ["owner"], permissions: ["menu.read", "menu.write", "orders.write", "bills.write", "payments.write"] };
+const MOCK_OUTLET: Outlet = { id: "mock-outlet", code: "MAIN", name: "Spice Route · Koramangala", isActive: true };
+const MOCK_PRINCIPAL: Principal ={ userId: "mock-user", tenantId: "mock-tenant", roles: ["owner"], permissions: ["menu.read", "menu.write", "orders.write", "bills.write", "payments.write"] };
 
 /** Pure pricing — shared contract with the API (T-102): unit = price + variant + options; tax per line, half CGST/half SGST. */
 export function priceLine(item: MenuItem, input: OrderItemInput) {
@@ -94,9 +95,11 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
   return {
     mode: "mock",
     auth: { login: async () => (await wait(latency), MOCK_PRINCIPAL), me: async () => MOCK_PRINCIPAL, logout: async () => {} },
+    outlets: { list: async () => [MOCK_OUTLET], current: async () => MOCK_OUTLET },
     menu: {
       categories: async () => (await wait(latency), structuredClone(categories)),
       items: async () => (await wait(latency), structuredClone(menuItems)),
+      effective: async () => (await wait(latency), structuredClone(menuItems.filter((i) => i.isAvailable && categories.find((c) => c.id === i.categoryId)?.isActive !== false))),
       async createCategory(input) { await wait(latency); const c: MenuCategory = { id: uid(), name: input.name, sortOrder: input.sortOrder ?? categories.length + 1, isActive: input.isActive ?? true }; categories.push(c); return structuredClone(c); },
       async updateCategory(id, input) { await wait(latency); const c = categories.find((x) => x.id === id); if (!c) throw new Error("Category not found"); Object.assign(c, input); return structuredClone(c); },
       async deleteCategory(id) { await wait(latency); if (menuItems.some((i) => i.categoryId === id)) throw new Error("Move or delete its items first"); const i = categories.findIndex((x) => x.id === id); if (i >= 0) categories.splice(i, 1); },

@@ -51,6 +51,7 @@ export interface ItemInput {
   modifierGroupIds?: string[];
 }
 
+export interface Outlet { id: string; code: string; name: string; address?: string | null; phone?: string | null; isActive: boolean }
 export interface LoginInput { tenantSlug: string; email: string; password: string }
 export interface Principal { userId: string; tenantId: string; roles: string[]; permissions: string[] }
 
@@ -58,8 +59,17 @@ export interface Principal { userId: string; tenantId: string; roles: string[]; 
 export interface PosApi {
   readonly mode: "mock" | "real" | "hybrid";
   auth: { login(input: LoginInput): Promise<Principal>; me(): Promise<Principal>; logout(): Promise<void> };
+  outlets: {
+    list(): Promise<Outlet[]>;
+    /** The outlet this POS is bound to: NEXT_PUBLIC_OUTLET_ID if set, else the first active outlet. */
+    current(): Promise<Outlet>;
+  };
   menu: {
-    categories(): Promise<MenuCategory[]>; items(): Promise<MenuItem[]>;
+    categories(): Promise<MenuCategory[]>;
+    /** Admin list: every item (incl. unavailable) with outlet pricing applied. */
+    items(): Promise<MenuItem[]>;
+    /** POS list: server-resolved effective menu for the current outlet (schedules + overrides + availability applied). */
+    effective(): Promise<MenuItem[]>;
     createCategory(input: CategoryInput): Promise<MenuCategory>;
     updateCategory(id: string, input: Partial<CategoryInput>): Promise<MenuCategory>;
     deleteCategory(id: string): Promise<void>;

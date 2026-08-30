@@ -45,9 +45,10 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 export const useMenu = () => {
   const api = useApi();
   const categories = useQuery({ queryKey: ["menu", "categories"], queryFn: api.menu.categories });
-  const items = useQuery({ queryKey: ["menu", "items"], queryFn: api.menu.items });
+  const items = useQuery({ queryKey: ["menu", "effective"], queryFn: api.menu.effective, refetchInterval: 60_000 });
   return { categories: (categories.data ?? []).filter((c) => c.isActive), items: items.data ?? [], loading: categories.isPending || items.isPending, error: categories.error ?? items.error };
 };
+export const useOutlet = () => { const api = useApi(); return useQuery({ queryKey: ["outlet"], queryFn: api.outlets.current, staleTime: Infinity }); };
 export const useTables = () => { const api = useApi(); return useQuery({ queryKey: ["tables"], queryFn: api.tables.list, staleTime: 5_000 }); };
 
 const toInput = (l: CartLine): OrderItemInput => ({ itemId: l.item.id, qty: l.qty, variantId: l.variantId, modifierIds: l.modifierIds, notes: l.notes, clientLineId: l.serverId ?? l.lineId });

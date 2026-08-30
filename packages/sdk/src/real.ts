@@ -1,6 +1,6 @@
 // Real PosApi over Jim's NestJS API (phase1-backend, /v1). Endpoints that don't exist yet throw
 // NotImplementedError so hybrid mode can route them to the mock until T-101/T-102/T-103 land.
-import type { MenuCategory, MenuItem, ModifierGroup, PosApi, EffectiveMenu, ItemInput, Principal, FloorView, TableInfo } from "./types";
+import type { MenuCategory, MenuItem, ModifierGroup, PosApi, EffectiveMenu, ItemInput, Principal, FloorView, TableInfo, Outlet } from "./types";
 import { createClient, type ApiClient } from "./client";
 
 export class NotImplementedError extends Error { constructor(what: string) { super(`${what} is not available on the API yet`); } }
@@ -13,10 +13,20 @@ const tableInfo = (s: { id: string; name: string }) => (t: FloorView["sections"]
 
 export function createRealApi(opts: RealApiOptions = {}): PosApi {
   const c = opts.client ?? createClient();
-  const outletId = opts.outletId ?? (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_OUTLET_ID : undefined) ?? null;
+  const pinned = opts.outletId ?? (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_OUTLET_ID : undefined) ?? null;
   const notYet = (what: string) => async () => { throw new NotImplementedError(what); };
 
-  const getItem = (id: string) => c.get<MenuItem>(`/menu/items/${id}${outletId ? `?outletId=${outletId}` : ""}`);
+  // Outlet resolution: pinned id, else first active outlet from GET /v1/outlets (cached per api instance).
+  let outletP: Promise<Outlet> | null = null;
+  const currentOutlet = () => (outletP ??= (async () => {
+    const list = await c.get<Outlet[]>("/outlets");
+    const o = pinned ? list.find((x) => x.id === pinned) : list.find((x) => x.isActive) ?? list[0];
+    if (!o) throw new Error(pinned ? `Outlet ${pinned} not found` : "No outlets configured for this tenant");
+    return o;
+  })().catch((e) => { outletP = null; throw e; }));
+  const outlet = async () => (await currentOutlet()).id;
+
+  const getItem = async (id: string) => c.get<MenuItem>(`/menu/items/${id}?outletId=${await outlet()}`);
 
   /** Diff-sync variants + the item's "Add-ons" modifier group against the flat editor input. */
   async function syncNested(id: string, input: Partial<ItemInput>) {
@@ -58,12 +68,12 @@ export function createRealApi(opts: RealApiOptions = {}): PosApi {
       me: () => c.get("/auth/me"),
       logout: async () => { await c.post("/auth/logout"); },
     },
+    outlets: { list: () => c.get<Outlet[]>("/outlets"), current: currentOutlet },
     menu: {
       categories: () => c.get<MenuCategory[]>("/menu/categories?includeInactive=true"),
-      items: async () => {
-        if (outletId) { const eff = await c.get<EffectiveMenu>(`/menu/outlets/${outletId}/effective`); return eff.categories.flatMap((cat) => cat.items); }
-        return c.get<MenuItem[]>("/menu/items?includeUnavailable=true");
-      },
+      /** Admin list (all items, outlet pricing applied). POS uses menu.effective(). */
+      items: async () => c.get<MenuItem[]>(`/menu/items?includeUnavailable=true&outletId=${await outlet()}`),
+      effective: async () => { const eff = await c.get<EffectiveMenu>(`/menu/outlets/${await outlet()}/effective`); return eff.categories.flatMap((cat) => cat.items); },
       createCategory: (input) => c.post("/menu/categories", input),
       updateCategory: (id, input) => c.patch(`/menu/categories/${id}`, input),
       deleteCategory: async (id) => { await c.del(`/menu/categories/${id}`); },
@@ -77,8 +87,7 @@ export function createRealApi(opts: RealApiOptions = {}): PosApi {
     },
     tables: {
       list: async () => {
-        if (!outletId) throw new Error("NEXT_PUBLIC_OUTLET_ID is required for the floor view (GET /v1/floor/outlets/:outletId)");
-        const floor = await c.get<FloorView>(`/floor/outlets/${outletId}`);
+        const floor = await c.get<FloorView>(`/floor/outlets/${await outlet()}`);
         return floor.sections.flatMap((s) => s.tables.map(tableInfo(s)));
       },
       setStatus: async (id, status, version) => {

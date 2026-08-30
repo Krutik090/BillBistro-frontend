@@ -37,9 +37,13 @@ await api.menu.deleteItem(created.id);
 const after = await api.menu.items();
 assert(after.length === before.length, "soft-deleted item gone from list");
 
-// Floor (T-101) — needs an outlet id (no outlets endpoint yet): OUTLET_ID=<uuid> pnpm --filter @billbistro/sdk smoke:real
-let floor = "skipped (set OUTLET_ID)";
-if (process.env.OUTLET_ID) {
+// Outlets (Jim e0259ea) + Floor (T-101). OUTLET_ID env pins an outlet; otherwise the first active one is auto-resolved.
+const outlets = await api.outlets.list();
+assert(outlets.length > 0 && outlets[0].code, "outlets list");
+const cur = await api.outlets.current();
+assert(cur.id === (process.env.OUTLET_ID ?? outlets.find((o) => o.isActive)?.id), "current outlet resolution");
+let floor = "";
+{
   const fapi = createRealApi({ client: createClient({ fetch: jarFetch }), outletId: process.env.OUTLET_ID });
   const tables = await fapi.tables.list();
   assert(tables.length > 0 && tables[0].section && tables[0].name, "floor tables flattened");
@@ -49,8 +53,8 @@ if (process.env.OUTLET_ID) {
   let illegal = false; try { await fapi.tables.setStatus(free.id, "RESERVED", occ.version); } catch { illegal = true; } assert(illegal, "illegal transition rejected (422)");
   let stale = false; try { await fapi.tables.setStatus(free.id, "FREE", free.version); } catch { stale = true; } assert(stale, "stale version rejected (409)");
   await fapi.tables.setStatus(free.id, "FREE", occ.version);
-  const eff = await fapi.menu.items();
-  assert(eff.every((i) => typeof i.effectivePrice === "number"), "effective menu carries effectivePrice");
+  const eff = await fapi.menu.effective();
+  assert(eff.every((i) => typeof i.effectivePrice === "number" && i.isAvailable), "effective menu carries effectivePrice, only available items");
   floor = `${tables.length} tables in ${new Set(tables.map((t) => t.section)).size} sections; effective menu ${eff.length} items`;
 }
-console.log("real API smoke OK:", { categories: cats.length, items: after.length, created: created.name, floor });
+console.log("real API smoke OK:", { outlet: `${cur.code} ${cur.id.slice(0, 8)}`, categories: cats.length, items: after.length, created: created.name, floor });
