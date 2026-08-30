@@ -16,7 +16,7 @@ export function TableSheet() {
   const setTable = usePos((s) => s.setTable);
   const current = usePos((s) => s.tableRef);
   const sections = [...new Set(tables.map((t) => t.section))];
-  const pick = (type: OrderType, ref: string | null, covers = 0) => { setTable(ref, type, covers); close(); };
+  const pick = (type: OrderType, ref: string | null, covers = 0, tableId: string | null = null) => { setTable(ref, type, covers, tableId); close(); };
   return (
     <Drawer open={open} onOpenChange={(o) => !o && close()} title="Table / order type">
       <div className="flex flex-col gap-6">
@@ -30,7 +30,7 @@ export function TableSheet() {
             <span className="text-xs font-semibold uppercase tracking-wide text-muted">{sec}</span>
             <div className="grid grid-cols-4 gap-2">
               {tables.filter((t) => t.section === sec).map((t) => (
-                <button key={t.id} onClick={() => pick("DINE_IN", t.name, t.seats)}
+                <button key={t.id} onClick={() => pick("DINE_IN", t.name, t.seats, t.id)}
                   className={cn("flex h-16 flex-col items-center justify-center rounded-lg border text-sm font-semibold", current === t.name ? "border-primary bg-primary-soft" : t.status === "FREE" ? "border-border bg-surface hover:border-border-strong" : t.status === "OCCUPIED" ? "border-warning/50 bg-warning/10 text-warning" : t.status === "BILLED" ? "border-info/50 bg-info/10 text-info" : t.status === "RESERVED" ? "border-chart-3/50 bg-chart-3/10 text-chart-3" : "border-border bg-surface-overlay text-subtle")}>
                   {t.name}<span className="text-[10px] font-medium opacity-70">{t.status === "FREE" ? `${t.seats} seats` : t.status.toLowerCase()}</span>
                 </button>
@@ -80,7 +80,7 @@ export function KotSheet() {
           <div key={k.id} className="overflow-hidden rounded-xl border border-border">
             <div className="flex items-center justify-between bg-surface-overlay px-4 py-2.5">
               <span className="font-mono font-semibold">{k.kotNo}</span>
-              <span className="text-xs text-muted">{tableRef ?? "Counter"} · {new Date(k.createdAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</span>
+              <span className="text-xs text-muted">{tableRef ?? "Counter"}{k.createdAt ? ` · ${new Date(k.createdAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}` : ""}</span>
               <Badge tone={k.status === "PENDING" ? "warning" : k.status === "READY" ? "success" : "info"}>{k.status.toLowerCase()}</Badge>
             </div>
             <ul className="px-4 py-2 text-sm">

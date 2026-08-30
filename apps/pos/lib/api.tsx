@@ -62,7 +62,7 @@ export function useSyncOrder() {
     try {
       const order = s.orderId
         ? await api.orders.replaceItems(s.orderId, s.lines.map(toInput), s.orderVersion ?? undefined)
-        : await api.orders.create({ type: s.type, tableRef: s.tableRef, items: s.lines.map(toInput), clientKey: crypto.randomUUID() });
+        : await api.orders.create({ type: s.type, tableId: s.tableId, tableRef: s.tableRef, guestCount: s.covers || undefined, items: s.lines.map(toInput), clientKey: crypto.randomUUID() });
       usePos.getState().setOrder(order);
       return order;
     } finally { usePos.getState().setSyncing(false); }

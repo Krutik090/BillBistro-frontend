@@ -1,6 +1,6 @@
 // Real PosApi over Jim's NestJS API (phase1-backend, /v1). Endpoints that don't exist yet throw
 // NotImplementedError so hybrid mode can route them to the mock until T-101/T-102/T-103 land.
-import type { MenuCategory, MenuItem, ModifierGroup, PosApi, EffectiveMenu, ItemInput, Principal, FloorView, TableInfo, Outlet } from "./types";
+import type { MenuCategory, MenuItem, ModifierGroup, PosApi, EffectiveMenu, ItemInput, Principal, FloorView, TableInfo, Outlet, Kot } from "./types";
 import { createClient, type ApiClient } from "./client";
 
 export class NotImplementedError extends Error { constructor(what: string) { super(`${what} is not available on the API yet`); } }
@@ -96,11 +96,12 @@ export function createRealApi(opts: RealApiOptions = {}): PosApi {
       },
     },
     orders: {
-      // Contract confirmed with Jim (T-102, landing): POST /orders {type, tableRef, items[{itemId, qty, variantId?, modifierIds?, notes?, clientLineId?}], clientKey}
-      create: (input) => c.post("/orders", input),
+      // T-102 @ 23e4f71: server re-prices every line and validates variant/modifier groups (422); clientKey = idempotency.
+      create: async (input) => c.post("/orders", { ...input, outletId: input.outletId ?? (input.tableId ? undefined : await outlet()), tableId: input.tableId ?? undefined, tableRef: input.tableRef ?? undefined, notes: input.notes ?? undefined }),
       get: (id) => c.get(`/orders/${id}`),
       replaceItems: (id, items, version) => c.patch(`/orders/${id}/items`, { items, version }),
-      sendKot: (orderId, orderItemIds, station) => c.post(`/orders/${orderId}/kots`, { orderItemIds, station }),
+      sendKot: async (orderId, orderItemIds, station) => { const k = await c.post<Kot & { items?: { id: string }[] }>(`/orders/${orderId}/kots`, { orderItemIds, station }); return { ...k, itemIds: k.itemIds ?? k.items?.map((i) => i.id) ?? orderItemIds }; },
+      cancel: (id, reason, version) => c.post(`/orders/${id}/cancel`, { reason, version }),
     },
     billing: {
       create: notYet("POST /bills (T-103)"),

@@ -52,8 +52,8 @@ export function Floor() {
   const visible = tables.filter((t) => section === "all" || t.section === section);
 
   const startOrder = (t: TableInfo) => {
-    setTable(t.name, "DINE_IN", t.seats);
-    if (t.status === "FREE" || t.status === "RESERVED") setStatus.mutate({ t, status: "OCCUPIED" });
+    // The order itself seats the table on the API (tableId → OCCUPIED + currentOrderId), so no manual status change here.
+    setTable(t.name, "DINE_IN", t.seats, t.id);
     setPicked(null);
     router.push("/");
   };

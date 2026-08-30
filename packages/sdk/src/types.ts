@@ -30,11 +30,12 @@ export interface FloorView { counts: Record<string, number>; sections: { id: str
 
 /** modifierIds = ModifierOption ids (across groups). */
 export interface OrderItemInput { itemId: string; qty: number; variantId?: string | null; modifierIds?: string[]; notes?: string | null; clientLineId?: string }
-export interface OrderInput { type: OrderType; tableRef?: string | null; items: OrderItemInput[]; clientKey?: string }
+/** outletId is injected by the real client when absent; tableId seats a FREE/RESERVED table (409 otherwise) and links currentOrderId. */
+export interface OrderInput { type: OrderType; outletId?: string; tableId?: string | null; tableRef?: string | null; guestCount?: number; notes?: string | null; items: OrderItemInput[]; clientKey?: string }
 /** Server echoes clientLineId so optimistic cart lines reconcile by it (id is server-generated). */
-export interface OrderItem { id: string; clientLineId?: string | null; itemId: string; name: string; variantName?: string | null; qty: number; unitPrice: Money; taxRateBps: number; lineTotal: Money; notes?: string | null; kotId?: string | null }
-export interface Order { id: string; orderNo: string; type: OrderType; status: OrderStatus; tableRef?: string | null; subtotal: Money; taxTotal: Money; discount: Money; total: Money; version: number; items: OrderItem[]; kots: Kot[]; createdAt: string }
-export interface Kot { id: string; orderId: string; kotNo: string; status: KotStatus; station?: string | null; itemIds: string[]; createdAt: string }
+export interface OrderItem { id: string; clientLineId?: string | null; itemId: string; name: string; variantId?: string | null; variantName?: string | null; modifiers?: { optionId: string; name: string; price: Money }[]; qty: number; unitPrice: Money; taxRateBps: number; lineTotal: Money; notes?: string | null; kotId?: string | null }
+export interface Order { id: string; orderNo: string; type: OrderType; status: OrderStatus; tableId?: string | null; tableRef?: string | null; table?: { id: string; code: string; status: TableStatus } | null; guestCount?: number | null; subtotal: Money; taxTotal: Money; discount: Money; total: Money; version: number; items: OrderItem[]; kots: Kot[]; createdAt: string }
+export interface Kot { id: string; orderId?: string; kotNo: string; status: KotStatus; station?: string | null; itemIds: string[]; createdAt?: string }
 
 export interface BillInput { orderId: string; discount?: Money; tip?: Money; splitOf?: { index: number; count: number } }
 export interface Bill { id: string; orderId: string; billNo: string; status: BillStatus; subtotal: Money; taxTotal: Money; discount: Money; tip: Money; roundOff: Money; total: Money; payments: Payment[]; finalizedAt?: string | null; createdAt: string }
@@ -85,8 +86,11 @@ export interface PosApi {
   orders: {
     create(input: OrderInput): Promise<Order>;
     get(id: string): Promise<Order>;
+    /** FULL-list replace. Lines already on a KOT must be resent unchanged (same clientLineId/id, qty, variant) or the API returns 422. */
     replaceItems(id: string, items: OrderItemInput[], version?: number): Promise<Order>;
     sendKot(orderId: string, orderItemIds: string[], station?: string): Promise<Kot>;
+    /** Void the order: open KOTs cancelled, table freed. */
+    cancel(id: string, reason: string, version?: number): Promise<Order>;
   };
   billing: {
     create(input: BillInput): Promise<Bill>;

@@ -11,7 +11,7 @@ export type Sheet = null | "item" | "table" | "hold" | "kot" | "discount" | "spl
 export interface HeldOrder { id: string; label: string; heldAt: string; type: OrderType; tableRef: string | null; lines: CartLine[]; discount: Discount; orderId: string | null }
 
 interface PosState {
-  type: OrderType; tableRef: string | null; covers: number;
+  type: OrderType; tableId: string | null; tableRef: string | null; covers: number;
   lines: CartLine[]; discount: Discount; tip: number;
   orderId: string | null; orderNo: string | null; orderVersion: number | null; kots: Order["kots"]; syncing: boolean;
   bill: Bill | null; splitCount: number; splitIndex: number;
@@ -20,7 +20,7 @@ interface PosState {
   toast: string | null;
 
   openSheet: (s: Sheet, item?: MenuItem | null, lineId?: string | null) => void;
-  setTable: (tableRef: string | null, type: OrderType, covers?: number) => void;
+  setTable: (tableRef: string | null, type: OrderType, covers?: number, tableId?: string | null) => void;
   addLine: (item: MenuItem, variantId: string | null, modifierIds: string[], qty: number, notes?: string | null) => void;
   updateLine: (lineId: string, patch: Partial<Pick<CartLine, "qty" | "variantId" | "modifierIds" | "notes">>) => void;
   removeLine: (lineId: string) => void;
@@ -31,14 +31,14 @@ interface PosState {
   reset: () => void; notify: (msg: string | null) => void;
 }
 
-const empty = { type: "DINE_IN" as OrderType, tableRef: null, covers: 0, lines: [], discount: null, tip: 0, orderId: null, orderNo: null, orderVersion: null, kots: [], bill: null, splitCount: 1, splitIndex: 0 };
+const empty = { type: "DINE_IN" as OrderType, tableId: null, tableRef: null, covers: 0, lines: [], discount: null, tip: 0, orderId: null, orderNo: null, orderVersion: null, kots: [], bill: null, splitCount: 1, splitIndex: 0 };
 
 export const usePos = create<PosState>()(
   persist(
     (set, get) => ({
       ...empty, syncing: false, held: [], sheet: null, sheetItem: null, editingLineId: null, toast: null,
       openSheet: (sheet, sheetItem = null, editingLineId = null) => set({ sheet, sheetItem, editingLineId }),
-      setTable: (tableRef, type, covers = 0) => set({ tableRef, type, covers }),
+      setTable: (tableRef, type, covers = 0, tableId = null) => set({ tableRef, type, covers, tableId }),
       addLine: (item, variantId, modifierIds, qty, notes = null) =>
         set((s) => {
           // merge identical lines (same item/variant/mods/notes) that aren't sent to kitchen yet
@@ -63,6 +63,6 @@ export const usePos = create<PosState>()(
       reset: () => set({ ...empty, sheet: null, sheetItem: null, editingLineId: null }),
       notify: (toast) => set({ toast }),
     }),
-    { name: "bb-pos-v1", partialize: (s) => ({ held: s.held, lines: s.lines, tableRef: s.tableRef, type: s.type, covers: s.covers, discount: s.discount, tip: s.tip, orderId: s.orderId, orderNo: s.orderNo, orderVersion: s.orderVersion, kots: s.kots }) },
+    { name: "bb-pos-v1", partialize: (s) => ({ held: s.held, lines: s.lines, tableId: s.tableId, tableRef: s.tableRef, type: s.type, covers: s.covers, discount: s.discount, tip: s.tip, orderId: s.orderId, orderNo: s.orderNo, orderVersion: s.orderVersion, kots: s.kots }) },
   ),
 );

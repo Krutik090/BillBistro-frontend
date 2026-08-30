@@ -125,7 +125,10 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
     orders: {
       async create(input) {
         await wait(latency);
-        const o: Order = totals({ id: uid(), orderNo: `#${++orderSeq}`, type: input.type, status: "OPEN", tableRef: input.tableRef ?? null, subtotal: 0, taxTotal: 0, discount: 0, total: 0, version: 1, items: buildItems(input.items, null), kots: [], createdAt: now() });
+        const t = input.tableId ? tables.find((x) => x.id === input.tableId) : undefined;
+        if (input.tableId && (!t || (t.status !== "FREE" && t.status !== "RESERVED"))) throw new Error("Table not free (409)");
+        const o: Order = totals({ id: uid(), orderNo: `#${++orderSeq}`, type: input.type, status: "OPEN", tableId: t?.id ?? null, tableRef: input.tableRef ?? t?.name ?? null, guestCount: input.guestCount ?? null, subtotal: 0, taxTotal: 0, discount: 0, total: 0, version: 1, items: buildItems(input.items, null), kots: [], createdAt: now() });
+        if (t) { t.status = "OCCUPIED"; t.orderId = o.id; t.statusSince = now(); t.version = (t.version ?? 1) + 1; }
         orders.set(o.id, o);
         return structuredClone(o);
       },
@@ -135,6 +138,14 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
         const o = orders.get(id); if (!o) throw new Error("Order not found");
         o.items = buildItems(items, o); o.version++; totals(o);
         return structuredClone(o);
+      },
+      async cancel(id, reason, version) {
+        await wait(latency);
+        const o = orders.get(id); if (!o) throw new Error("Order not found");
+        if (version !== undefined && version !== o.version) throw new Error("Stale order version (409)");
+        o.status = "CANCELLED"; o.version++; for (const k of o.kots) if (k.status === "PENDING" || k.status === "PREPARING") k.status = "CANCELLED";
+        const t = tables.find((x) => x.id === o.tableId); if (t) { t.status = "FREE"; t.orderId = null; t.version = (t.version ?? 1) + 1; }
+        void reason; return structuredClone(o);
       },
       async sendKot(orderId, orderItemIds, station) {
         await wait(latency * 2);

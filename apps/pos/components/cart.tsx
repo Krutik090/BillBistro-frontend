@@ -80,16 +80,19 @@ export function Cart() {
 }
 
 function Line({ l }: { l: CartLine }) {
-  const { updateLine, removeLine, openSheet } = usePos();
+  const { updateLine, removeLine, openSheet, notify } = usePos();
   const sub = lineLabel(l);
+  // Lines already on a KOT are immutable on the API (422 on qty/variant change) — add a new line instead.
+  const locked = !!l.kotId;
+  const lockedMsg = () => notify("Sent to kitchen — add a new line to change it");
   return (
     <motion.li layout initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.15 }} className="flex items-center gap-3 border-b border-border py-3">
-      <div className="flex h-9 w-24 shrink-0 items-center justify-between rounded-md bg-surface-overlay">
-        <button className="h-full w-8 text-muted hover:text-foreground" onClick={() => (l.qty === 1 ? removeLine(l.lineId) : updateLine(l.lineId, { qty: l.qty - 1 }))} aria-label="Decrease"><Minus size={14} className="mx-auto" /></button>
+      <div className={cn("flex h-9 w-24 shrink-0 items-center justify-between rounded-md bg-surface-overlay", locked && "opacity-60")}>
+        <button className="h-full w-8 text-muted hover:text-foreground" onClick={() => (locked ? lockedMsg() : l.qty === 1 ? removeLine(l.lineId) : updateLine(l.lineId, { qty: l.qty - 1 }))} aria-label="Decrease"><Minus size={14} className="mx-auto" /></button>
         <span className="text-md font-semibold font-tabular">{l.qty}</span>
-        <button className="h-full w-8 text-primary" onClick={() => updateLine(l.lineId, { qty: l.qty + 1 })} aria-label="Increase"><Plus size={14} className="mx-auto" /></button>
+        <button className="h-full w-8 text-primary" onClick={() => (locked ? lockedMsg() : updateLine(l.lineId, { qty: l.qty + 1 }))} aria-label="Increase"><Plus size={14} className="mx-auto" /></button>
       </div>
-      <button className="min-w-0 flex-1 text-left" onClick={() => openSheet("item", l.item, l.lineId)}>
+      <button className="min-w-0 flex-1 text-left" onClick={() => (locked ? lockedMsg() : openSheet("item", l.item, l.lineId))}>
         <div className="flex items-center gap-2"><span className="truncate text-md font-medium">{l.item.name}</span>{l.kotId && <ChefHat size={12} className="shrink-0 text-success" />}</div>
         {(sub || l.notes) && <div className="truncate text-xs text-muted">{[sub, l.notes].filter(Boolean).join(" · ")}</div>}
       </button>
