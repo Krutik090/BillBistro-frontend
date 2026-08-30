@@ -1,0 +1,140 @@
+// In-memory typed mock of PosApi. Same money math contract as the API (int paise, GST bps).
+// Latency is simulated so optimistic UI paths are exercised.
+import type { Bill, BillInput, Kot, MenuCategory, MenuItem, Order, OrderInput, OrderItemInput, Payment, PaymentInput, PosApi, TableInfo } from "./types";
+
+const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const now = () => new Date().toISOString();
+
+const cat = (id: string, name: string, sortOrder: number): MenuCategory => ({ id, name, sortOrder, isActive: true });
+export const MOCK_CATEGORIES: MenuCategory[] = [cat("c-starters", "Starters", 1), cat("c-mains", "Mains", 2), cat("c-breads", "Breads", 3), cat("c-rice", "Rice", 4), cat("c-drinks", "Drinks", 5), cat("c-desserts", "Desserts", 6)];
+
+type ItemSeed = [id: string, cat: string, name: string, rupees: number, veg: boolean, variants?: [string, number][], modifiers?: [string, number][]];
+const seeds: ItemSeed[] = [
+  ["i-paneer-tikka", "c-starters", "Paneer Tikka", 320, true, [["Half", -120], ["Full", 0]], [["Extra mint chutney", 20], ["Extra spicy", 0]]],
+  ["i-chicken-65", "c-starters", "Chicken 65", 360, false, [["Half", -140], ["Full", 0]], [["Extra spicy", 0]]],
+  ["i-veg-manchurian", "c-starters", "Veg Manchurian", 260, true, [], [["Gravy", 20]]],
+  ["i-masala-papad", "c-starters", "Masala Papad", 60, true],
+  ["i-butter-chicken", "c-mains", "Butter Chicken", 420, false, [["Half", -160], ["Full", 0]], [["Extra gravy", 40], ["Boneless", 60]]],
+  ["i-dal-makhani", "c-mains", "Dal Makhani", 280, true, [["Half", -100], ["Full", 0]], [["Extra butter", 20]]],
+  ["i-mutton-rogan", "c-mains", "Mutton Rogan Josh", 520, false, [], [["Extra gravy", 40]]],
+  ["i-garlic-naan", "c-breads", "Garlic Naan", 70, true, [], [["Extra butter", 10], ["Cheese", 40]]],
+  ["i-tandoori-roti", "c-breads", "Tandoori Roti", 40, true, [], [["Butter", 10]]],
+  ["i-veg-biryani", "c-rice", "Veg Biryani", 320, true, [["Half", -120], ["Full", 0]], [["Raita", 30], ["Extra gravy", 40]]],
+  ["i-chicken-biryani", "c-rice", "Chicken Biryani", 380, false, [["Half", -140], ["Full", 0]], [["Raita", 30], ["Extra leg piece", 80]]],
+  ["i-sweet-lassi", "c-drinks", "Sweet Lassi", 120, true, [["Regular", 0], ["Large", 40]]],
+  ["i-coke", "c-drinks", "Coke", 60, true, [["300ml", 0], ["750ml", 40]]],
+  ["i-gulab-jamun", "c-desserts", "Gulab Jamun", 140, true, [], [["Extra piece", 50]]],
+  ["i-kulfi", "c-desserts", "Kulfi", 110, true],
+];
+export const MOCK_ITEMS: MenuItem[] = seeds.map(([id, categoryId, name, rupees, isVeg, variants = [], modifiers = []]) => ({
+  id, categoryId, name, sku: id.toUpperCase(), description: null, basePrice: rupees * 100, taxRateBps: categoryId === "c-drinks" ? 1800 : 500, isVeg, isAvailable: true,
+  variants: variants.map(([vn, d]) => ({ id: `${id}:v:${vn}`, itemId: id, name: vn, priceDelta: d * 100 })),
+  modifiers: modifiers.map(([mn, p]) => ({ id: `${id}:m:${mn}`, itemId: id, name: mn, price: p * 100 })),
+}));
+
+const table = (id: string, section: string, name: string, seats: number, status: TableInfo["status"] = "FREE"): TableInfo => ({ id, section, name, seats, status });
+export const MOCK_TABLES: TableInfo[] = [
+  table("t1", "Main hall", "T1", 2), table("t2", "Main hall", "T2", 4, "OCCUPIED"), table("t3", "Main hall", "T3", 4), table("t4", "Main hall", "T4", 4),
+  table("t5", "Main hall", "T5", 6, "BILLED"), table("t6", "Main hall", "T6", 2), table("t7", "Rooftop", "R1", 4, "OCCUPIED"), table("t8", "Rooftop", "R2", 4),
+  table("t9", "Rooftop", "R3", 8), table("t10", "AC room", "A1", 4), table("t11", "AC room", "A2", 6), table("t12", "AC room", "A3", 2),
+];
+
+/** Pure pricing — shared contract with the API (T-102): unit = base + variant + modifiers; tax per line, half CGST/half SGST. */
+export function priceLine(item: MenuItem, input: OrderItemInput) {
+  const variant = item.variants.find((v) => v.id === input.variantId);
+  const mods = item.modifiers.filter((m) => input.modifierIds?.includes(m.id));
+  const unitPrice = item.basePrice + (variant?.priceDelta ?? 0) + mods.reduce((s, m) => s + m.price, 0);
+  const name = mods.length ? `${item.name} (+${mods.map((m) => m.name).join(", ")})` : item.name;
+  return { unitPrice, lineTotal: unitPrice * input.qty, variantName: variant?.name ?? null, name, taxRateBps: item.taxRateBps };
+}
+
+export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
+  const latency = opts.latencyMs ?? 120;
+  const orders = new Map<string, Order>();
+  const bills = new Map<string, Bill>();
+  let orderSeq = 1041, kotSeq = 17, billSeq = 1041;
+  const itemById = new Map(MOCK_ITEMS.map((i) => [i.id, i]));
+
+  const buildItems = (items: OrderItemInput[], existing: Order | null) =>
+    items.map((input) => {
+      const item = itemById.get(input.itemId);
+      if (!item) throw new Error(`Unknown item ${input.itemId}`);
+      const prev = existing?.items.find((e) => e.id === input.clientLineId);
+      return { id: input.clientLineId ?? uid(), itemId: item.id, qty: input.qty, notes: input.notes ?? null, kotId: prev?.kotId ?? null, ...priceLine(item, input) };
+    });
+  const totals = (o: Order) => {
+    o.subtotal = o.items.reduce((s, l) => s + l.lineTotal, 0);
+    o.taxTotal = o.items.reduce((s, l) => s + Math.round((l.lineTotal * l.taxRateBps) / 10000), 0);
+    o.total = o.subtotal + o.taxTotal - o.discount;
+    return o;
+  };
+
+  return {
+    mode: "mock",
+    menu: {
+      categories: async () => (await wait(latency), MOCK_CATEGORIES),
+      items: async () => (await wait(latency), MOCK_ITEMS),
+    },
+    tables: { list: async () => (await wait(latency), MOCK_TABLES.map((t) => ({ ...t }))) },
+    orders: {
+      async create(input) {
+        await wait(latency);
+        const o: Order = totals({ id: uid(), orderNo: `#${++orderSeq}`, type: input.type, status: "OPEN", tableRef: input.tableRef ?? null, subtotal: 0, taxTotal: 0, discount: 0, total: 0, version: 1, items: buildItems(input.items, null), kots: [], createdAt: now() });
+        orders.set(o.id, o);
+        return structuredClone(o);
+      },
+      async get(id) { await wait(latency / 2); const o = orders.get(id); if (!o) throw new Error("Order not found"); return structuredClone(o); },
+      async replaceItems(id, items) {
+        await wait(latency);
+        const o = orders.get(id); if (!o) throw new Error("Order not found");
+        o.items = buildItems(items, o); o.version++; totals(o);
+        return structuredClone(o);
+      },
+      async sendKot(orderId, orderItemIds, station) {
+        await wait(latency * 2);
+        const o = orders.get(orderId); if (!o) throw new Error("Order not found");
+        const kot: Kot = { id: uid(), orderId, kotNo: `K-${++kotSeq}`, status: "PENDING", station: station ?? null, itemIds: orderItemIds, createdAt: now() };
+        for (const l of o.items) if (orderItemIds.includes(l.id)) l.kotId = kot.id;
+        o.kots.push(kot); o.version++;
+        return structuredClone(kot);
+      },
+    },
+    billing: {
+      async create(input) {
+        await wait(latency);
+        const o = orders.get(input.orderId); if (!o) throw new Error("Order not found");
+        const discount = Math.min(input.discount ?? 0, o.subtotal);
+        const share = input.splitOf ? 1 / input.splitOf.count : 1;
+        const subtotal = Math.round(o.subtotal * share);
+        const disc = Math.round(discount * share);
+        const taxable = subtotal - disc;
+        const taxTotal = Math.round(o.items.reduce((s, l) => s + (l.lineTotal * share * (1 - discount / Math.max(o.subtotal, 1)) * l.taxRateBps) / 10000, 0));
+        const tip = Math.round((input.tip ?? 0) * share);
+        const raw = taxable + taxTotal + tip;
+        const total = Math.round(raw / 100) * 100;
+        const b: Bill = { id: uid(), orderId: o.id, billNo: `B-${++billSeq}${input.splitOf ? `/${input.splitOf.index + 1}` : ""}`, status: "DRAFT", subtotal, taxTotal, discount: disc, tip, roundOff: total - raw, total, payments: [], createdAt: now() };
+        bills.set(b.id, b); o.status = "BILLED"; o.discount = discount;
+        return structuredClone(b);
+      },
+      async pay(billId, input) {
+        await wait(latency * 3);
+        const b = bills.get(billId); if (!b) throw new Error("Bill not found");
+        const dup = b.payments.find((p) => p.id === input.idempotencyKey); if (dup) return structuredClone(dup);
+        if (input.mode === "UPI" && !input.reference) throw new Error("UPI reference required");
+        const p: Payment = { id: input.idempotencyKey, billId, mode: input.mode, status: "CAPTURED", amount: input.amount, reference: input.reference ?? null, createdAt: now() };
+        b.payments.push(p);
+        return structuredClone(p);
+      },
+      async finalize(billId) {
+        await wait(latency);
+        const b = bills.get(billId); if (!b) throw new Error("Bill not found");
+        const paid = b.payments.filter((p) => p.status === "CAPTURED").reduce((s, p) => s + p.amount, 0);
+        if (paid < b.total) throw new Error(`Bill not fully paid (${paid}/${b.total})`);
+        b.status = "FINAL"; b.finalizedAt = now();
+        const o = orders.get(b.orderId); if (o) o.status = "SETTLED";
+        return structuredClone(b);
+      },
+    },
+  };
+}
