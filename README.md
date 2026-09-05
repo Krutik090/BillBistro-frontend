@@ -1,75 +1,59 @@
-# BillBistro
+# BillBistro — frontend
 
-Multi-tenant restaurant POS / management SaaS. See `PLAN.md` (authoritative).
-
-> **Status (Phase 0):** backend scaffold committed. **DB verification pending** — the
-> RLS proof (`pnpm db:rls-check`), migrations and seed have not yet been run on this
-> machine because Docker image pulls were blocked by the local network. See "Verify" below.
+The four client apps for BillBistro, a multi-tenant restaurant POS / management SaaS.
+The NestJS API lives in the sibling `billbistro-backend` repo — see `PLAN.md` here for
+the product spec (authoritative).
 
 ## Layout
 
 ```
-apps/api          NestJS modular monolith (auth, tenancy, menu/orders stubs)
-apps/{pos,dashboard,kds,qr}   frontends (Pam)
-packages/types    shared Zod schemas + TS types
-packages/config   tsconfig presets, design tokens, tailwind theme
-packages/ui       shared component library (Pam)
-prisma/           schema + migrations (incl. RLS policies) + seed
-infra/            docker-compose (postgres 16 + redis 7 + api), api.Dockerfile
-scripts/          rls-check.ts — proves cross-tenant isolation through the app role
+apps/pos          Cashier billing terminal — catalog, cart, KOT, payment, receipt, floor, day-close (PWA)
+apps/dashboard     Owner/admin — menu management is fully wired; overview is a static mockup
+apps/kds           Kitchen Display System — static mockup, not yet wired to the API
+apps/qr            Customer-facing QR menu — static mockup, not yet wired to the API
+packages/sdk       Shared typed PosApi client (fetch-based), plus a full in-memory mock implementation
+packages/ui        Shared component library (Radix + CVA + Tailwind v4), Storybook at :6006
+packages/types     Shared Zod schemas + TS types (mirrors the backend's request/response shapes)
+packages/config    tsconfig presets, design tokens, tailwind theme
+docs/design        Design-system reference (tokens, Figma, hero screens)
 ```
 
 ## Run (local dev)
 
 ```bash
 pnpm install
-cp .env.example .env
-docker compose -f infra/docker-compose.yml up -d postgres redis
-pnpm db:migrate          # prisma migrate deploy (uses DATABASE_URL_MIGRATE = table owner)
-pnpm db:seed             # demo tenant: slug demo, owner@demo.local / Password123!
-pnpm db:rls-check        # must print "RLS CHECK PASSED"
-pnpm api:dev             # http://localhost:4000/health  docs: /docs
-# NOTE: postgres is published on host port 5433 (5432 is commonly taken by a local install).
+pnpm dev              # turbo runs every app: POS :3000, Dashboard :3001, KDS :3002, QR :3003
+# or one at a time:
+pnpm pos:dev
+pnpm dashboard:dev
 ```
 
-Everything in one go (builds the api image, migrates + seeds on boot):
+Each app reads `NEXT_PUBLIC_API_MODE` (`mock` | `real`) from its own `.env.local` — copy the
+`.env.example` in `apps/pos` / `apps/dashboard` to get started. `mock` runs entirely in-memory,
+no backend required. `real` talks to `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`) —
+run the `billbistro-backend` API alongside it and log in with tenant `demo`,
+`owner@demo.local` / `Password123!`.
 
-```bash
-docker compose -f infra/docker-compose.yml up --build
-```
+## What's actually wired up
 
-Login:
+- **POS** (`/`, `/tables`, `/day-close`) — fully implemented against the real API: catalog,
+  cart, KOT, payment/split/change, receipt print, live floor map, day-close Z-report.
+- **Dashboard** (`/menu`) — full menu CRUD wired to the real API. The overview page (`/`) is
+  static sample data — no charts or live KPIs yet.
+- **KDS** and **QR** are UI mockups only: hardcoded sample tickets/menu, no `PosApi` calls.
 
-```bash
-curl -c c.txt -H 'content-type: application/json' \
-  -d '{"tenantSlug":"demo","email":"owner@demo.local","password":"Password123!"}' \
-  http://localhost:4000/v1/auth/login
-curl -b c.txt http://localhost:4000/v1/auth/me
-```
+## State management
 
-## Multi-tenancy (the rule)
+- Server state: TanStack React Query (POS, Dashboard) — table statuses poll every 5s, the
+  effective menu every 60s, day-close every 30s.
+- Local state: Zustand, POS only — the in-progress cart persists to `localStorage`
+  (`bb-pos-v1`) so a refresh doesn't lose the order.
+- Auth: httpOnly cookies set by the backend; the SDK always sends `credentials: "include"` and
+  never touches a token directly. `AuthGate` blocks the app tree until `GET /v1/auth/me` succeeds.
 
-- Every tenant table carries `tenant_id`, `created_at`, `updated_at`, `deleted_at`.
-- Postgres **RLS is FORCED** on every tenant table; policy = `tenant_id = app_current_tenant()`
-  where `app_current_tenant()` reads the transaction-local GUC `app.tenant_id`.
-- The API connects as `billbistro_app` (**NOSUPERUSER, NOBYPASSRLS**, not the table owner).
-  Migrations/seed use `DATABASE_URL_MIGRATE` (owner).
-- In code: `prisma.scoped.<model>` (tenant from request context, set by `TenantContextInterceptor`
-  from the JWT), `prisma.withTenant(tenantId, fn)` for multi-step transactions,
-  `prisma.system(fn)` (sets `app.bypass_rls=on`) **only** for platform paths such as
-  tenant lookup at login.
-- Money is integer minor units (paise). Tax rates in basis points.
+## The shared SDK
 
-## Auth
-
-JWT access (15m) + rotating refresh (30d, hashed in `refresh_tokens`), both httpOnly cookies
-(`access_token` on `/`, `refresh_token` on `/v1/auth`). Bearer header also accepted.
-RBAC: `@RequirePermissions('menu.write')` → `PermissionsGuard` checks the `perms` claim.
-Routes: `POST /v1/auth/login|refresh|logout`, `GET /v1/auth/me`.
-
-## Verify (once a DB is reachable)
-
-```bash
-pnpm db:migrate && pnpm db:seed && pnpm db:rls-check
-curl http://localhost:4000/health   # {"status":"ok","db":"up",...}
-```
+`packages/sdk` exports one `PosApi` contract (`createPosApi(mode)`) implemented twice — once
+against the real backend (`src/real.ts`), once fully in-memory (`src/mock.ts`, seeded with a
+sample "Spice Route" restaurant: categories, items, tables, GST rates). Every frontend app
+imports the same contract, so switching an app between mock and real is a one-line env change.

@@ -8,27 +8,14 @@
     "lint": "turbo run lint",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate deploy",
-    "db:migrate:dev": "prisma migrate dev",
-    "db:seed": "tsx prisma/seed.ts",
-    "db:rls-check": "tsx scripts/rls-check.ts",
-    "api:dev": "pnpm --filter @billbistro/api dev"
+    "pos:dev": "pnpm --filter @billbistro/pos dev",
+    "dashboard:dev": "pnpm --filter @billbistro/dashboard dev",
+    "kds:dev": "pnpm --filter @billbistro/kds dev",
+    "qr:dev": "pnpm --filter @billbistro/qr dev"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "prisma": "^6.4.0",
-    "tsx": "^4.19.0",
     "turbo": "^2.4.0",
     "typescript": "^5.7.0"
-  },
-  "dependencies": {
-    "@prisma/client": "^6.4.0",
-    "argon2": "^0.41.1",
-    "dotenv": "^16.4.7"
-  },
-  "prisma": {
-    "schema": "prisma/schema.prisma",
-    "seed": "tsx prisma/seed.ts"
   }
 }
