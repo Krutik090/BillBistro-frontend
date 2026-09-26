@@ -1,6 +1,6 @@
 // Real PosApi over Jim's NestJS API (phase1-backend, /v1). Endpoints that don't exist yet throw
 // NotImplementedError so hybrid mode can route them to the mock until T-101/T-102/T-103 land.
-import type { MenuCategory, MenuItem, ModifierGroup, PosApi, EffectiveMenu, ItemInput, Principal, FloorView, TableInfo, Outlet, KotTicket, SalesReport, ItemSalesReport, TaxReport, InventoryItem, InventoryItemInput, StockMovement, RecipeLine } from "./types";
+import type { MenuCategory, MenuItem, ModifierGroup, PosApi, EffectiveMenu, ItemInput, Principal, FloorView, TableInfo, Outlet, KotTicket, SalesReport, ItemSalesReport, TaxReport, InventoryItem, InventoryItemInput, StockMovement, RecipeLine, OrderSummary, Customer, CustomerInput, Settings, SettingsInput } from "./types";
 import { createClient, type ApiClient } from "./client";
 
 export class NotImplementedError extends Error { constructor(what: string) { super(`${what} is not available on the API yet`); } }
@@ -70,7 +70,7 @@ export function createRealApi(opts: RealApiOptions = {}): PosApi {
       me: () => c.get("/auth/me"),
       logout: async () => { await c.post("/auth/logout"); },
     },
-    outlets: { list: () => c.get<Outlet[]>("/outlets"), current: currentOutlet },
+    outlets: { list: () => c.get<Outlet[]>("/outlets"), current: currentOutlet, update: (id, input) => c.patch<Outlet>(`/outlets/${id}`, input) },
     menu: {
       categories: () => c.get<MenuCategory[]>("/menu/categories?includeInactive=true"),
       /** Admin list (all items, outlet pricing applied). POS uses menu.effective(). */
@@ -98,6 +98,12 @@ export function createRealApi(opts: RealApiOptions = {}): PosApi {
       },
     },
     orders: {
+      // Live orders view (dashboard/POS) — GET /v1/orders returns _count instead of items/kots arrays.
+      list: async (f = {}) => {
+        const q = new URLSearchParams({ outletId: await outlet(), ...(f.status ? { status: f.status } : {}), ...(f.limit ? { limit: String(f.limit) } : {}) });
+        const rows = await c.get<(Omit<OrderSummary, "itemCount" | "kotCount"> & { _count: { items: number; kots: number } })[]>(`/orders?${q}`);
+        return rows.map(({ _count, ...r }) => ({ ...r, itemCount: _count.items, kotCount: _count.kots }));
+      },
       // T-102 @ 23e4f71: server re-prices every line and validates variant/modifier groups (422); clientKey = idempotency.
       create: async (input) => c.post("/orders", { ...input, outletId: input.outletId ?? (input.tableId ? undefined : await outlet()), tableId: input.tableId ?? undefined, tableRef: input.tableRef ?? undefined, notes: input.notes ?? undefined }),
       get: (id) => c.get(`/orders/${id}`),
@@ -157,6 +163,16 @@ export function createRealApi(opts: RealApiOptions = {}): PosApi {
       movements: (id) => c.get<StockMovement[]>(`/inventory/items/${id}/movements`),
       recipe: (menuItemId) => c.get<RecipeLine[]>(`/inventory/recipes?menuItemId=${menuItemId}`),
       setRecipe: (menuItemId, lines) => c.put<RecipeLine[]>(`/inventory/recipes/${menuItemId}`, { lines }),
+    },
+    customers: {
+      list: (q) => c.get<Customer[]>(`/customers${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+      create: (input) => c.post<Customer>("/customers", input),
+      update: (id, input) => c.patch<Customer>(`/customers/${id}`, input),
+      delete: async (id) => { await c.del(`/customers/${id}`); },
+    },
+    settings: {
+      get: () => c.get<Settings>("/settings"),
+      update: (input) => c.patch<Settings>("/settings", input),
     },
   };
 }

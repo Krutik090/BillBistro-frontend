@@ -1,7 +1,7 @@
 "use client";
 import * as React from "react";
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createPosApi, ApiError, type CategoryInput, type ItemInput, type PosApi, type InventoryItemInput, type Milli } from "@billbistro/sdk";
+import { createPosApi, ApiError, type CategoryInput, type ItemInput, type PosApi, type InventoryItemInput, type Milli, type CustomerInput, type SettingsInput, type OutletInput, type OrderStatus } from "@billbistro/sdk";
 import { Button, Input, LogoMark } from "@billbistro/ui";
 
 const ApiContext = React.createContext<PosApi | null>(null);
@@ -100,4 +100,61 @@ export function useRecipe(menuItemId: string | null) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["inventory", "recipe", menuItemId] }),
   });
   return { lines: q.data ?? [], loading: q.isPending, setRecipe };
+}
+
+/** Polls so the board stays current without a manual refresh; short interval since orders are the live-ops view. */
+export function useLiveOrders(status?: OrderStatus) {
+  const api = useApi();
+  const q = useQuery({ queryKey: ["orders", "list", status ?? "OPEN"], queryFn: () => api.orders.list({ status: status ?? "OPEN", limit: 200 }), refetchInterval: 8_000 });
+  return { orders: q.data ?? [], loading: q.isPending, error: q.error };
+}
+
+export function useOrderActions() {
+  const api = useApi(); const qc = useQueryClient();
+  const inv = () => qc.invalidateQueries({ queryKey: ["orders"] });
+  return {
+    cancel: useMutation({ mutationFn: ({ id, reason }: { id: string; reason: string }) => api.orders.cancel(id, reason), onSuccess: inv }),
+  };
+}
+
+export function useCustomers(q = "") {
+  const api = useApi();
+  const query = useQuery({ queryKey: ["customers", q], queryFn: () => api.customers.list(q || undefined) });
+  return { customers: query.data ?? [], loading: query.isPending, error: query.error };
+}
+
+export function useCustomerMutations() {
+  const api = useApi(); const qc = useQueryClient();
+  const inv = () => qc.invalidateQueries({ queryKey: ["customers"] });
+  return {
+    create: useMutation({ mutationFn: (i: CustomerInput) => api.customers.create(i), onSuccess: inv }),
+    update: useMutation({ mutationFn: ({ id, input }: { id: string; input: Partial<CustomerInput> }) => api.customers.update(id, input), onSuccess: inv }),
+    delete: useMutation({ mutationFn: (id: string) => api.customers.delete(id), onSuccess: inv }),
+  };
+}
+
+export function useSettings() {
+  const api = useApi();
+  const q = useQuery({ queryKey: ["settings"], queryFn: api.settings.get });
+  return { settings: q.data, loading: q.isPending, error: q.error };
+}
+
+export function useSettingsMutations() {
+  const api = useApi(); const qc = useQueryClient();
+  return {
+    update: useMutation({ mutationFn: (i: SettingsInput) => api.settings.update(i), onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }) }),
+  };
+}
+
+export function useOutlet() {
+  const api = useApi();
+  const q = useQuery({ queryKey: ["outlets", "current"], queryFn: api.outlets.current });
+  return { outlet: q.data, loading: q.isPending, error: q.error };
+}
+
+export function useOutletMutations() {
+  const api = useApi(); const qc = useQueryClient();
+  return {
+    update: useMutation({ mutationFn: ({ id, input }: { id: string; input: OutletInput }) => api.outlets.update(id, input), onSuccess: () => qc.invalidateQueries({ queryKey: ["outlets"] }) }),
+  };
 }

@@ -38,6 +38,8 @@ export interface OrderInput { type: OrderType; outletId?: string; tableId?: stri
 /** Server echoes clientLineId so optimistic cart lines reconcile by it (id is server-generated). */
 export interface OrderItem { id: string; clientLineId?: string | null; itemId: string; name: string; variantId?: string | null; variantName?: string | null; modifiers?: { optionId: string; name: string; price: Money }[]; qty: number; unitPrice: Money; taxRateBps: number; lineTotal: Money; notes?: string | null; kotId?: string | null }
 export interface Order { id: string; orderNo: string; type: OrderType; status: OrderStatus; tableId?: string | null; tableRef?: string | null; table?: { id: string; code: string; status: TableStatus } | null; guestCount?: number | null; subtotal: Money; taxTotal: Money; discount: Money; total: Money; version: number; items: OrderItem[]; kots: Kot[]; createdAt: string }
+/** GET /v1/orders row — no items/kots array (use orders.get(id) for those), counts instead. */
+export interface OrderSummary { id: string; orderNo: string; type: OrderType; status: OrderStatus; tableId?: string | null; tableRef?: string | null; table?: { id: string; code: string } | null; subtotal: Money; taxTotal: Money; discount: Money; total: Money; itemCount: number; kotCount: number; createdAt: string }
 export interface Kot { id: string; orderId?: string; kotNo: string; status: KotStatus; station?: string | null; itemIds: string[]; createdAt?: string }
 /** KDS feed row (GET /v1/kots): ticket + order/table context + lines with modifiers. */
 export interface KotTicket extends Kot { orderNo?: string; tableRef?: string | null; items?: { id: string; name: string; qty: number; variantName?: string | null; notes?: string | null; modifiers?: { name: string }[] }[] }
@@ -89,6 +91,7 @@ export interface ItemInput {
 }
 
 export interface Outlet { id: string; code: string; name: string; address?: string | null; phone?: string | null; isActive: boolean }
+export interface OutletInput { name?: string; address?: string | null; phone?: string | null }
 
 /** T-107 basic inventory. */
 export interface InventoryItem { id: string; name: string; unit: string; stockMilli: Milli; lowStockMilli: Milli; isActive: boolean }
@@ -99,6 +102,14 @@ export interface RecipeLine { id: string; menuItemId: string; inventoryItemId: s
 export interface LoginInput { tenantSlug: string; email: string; password: string }
 export interface Principal { userId: string; tenantId: string; roles: string[]; permissions: string[] }
 
+/** T-109 basic CRM — a phone book. No loyalty/points/order-linking yet. */
+export interface Customer { id: string; name: string; phone: string; email?: string | null; notes?: string | null; createdAt: string }
+export interface CustomerInput { name: string; phone: string; email?: string | null; notes?: string | null }
+
+/** T-109 business profile (Settings). currency/timezone are read-only here. */
+export interface Settings { id: string; name: string; gstin?: string | null; currency: string; timezone: string; slug: string }
+export interface SettingsInput { name?: string; gstin?: string | null }
+
 /** The contract the POS + dashboard build against. Real + mock implement it identically. */
 export interface PosApi {
   readonly mode: "mock" | "real" | "hybrid";
@@ -107,6 +118,7 @@ export interface PosApi {
     list(): Promise<Outlet[]>;
     /** The outlet this POS is bound to: NEXT_PUBLIC_OUTLET_ID if set, else the first active outlet. */
     current(): Promise<Outlet>;
+    update(id: string, input: OutletInput): Promise<Outlet>;
   };
   menu: {
     categories(): Promise<MenuCategory[]>;
@@ -127,6 +139,8 @@ export interface PosApi {
     setStatus(id: string, status: TableStatus, version?: number): Promise<TableInfo>;
   };
   orders: {
+    /** Live orders view (dashboard/POS) — no items/kots array, use get(id) for the full order. */
+    list(filter?: { status?: OrderStatus; limit?: number }): Promise<OrderSummary[]>;
     create(input: OrderInput): Promise<Order>;
     get(id: string): Promise<Order>;
     /** FULL-list replace. Lines already on a KOT must be resent unchanged (same clientLineId/id, qty, variant) or the API returns 422. */
@@ -181,5 +195,15 @@ export interface PosApi {
     recipe(menuItemId: string): Promise<RecipeLine[]>;
     /** Full replace of the recipe for one menu item. */
     setRecipe(menuItemId: string, lines: { inventoryItemId: string; qtyMilli: Milli }[]): Promise<RecipeLine[]>;
+  };
+  customers: {
+    list(q?: string): Promise<Customer[]>;
+    create(input: CustomerInput): Promise<Customer>;
+    update(id: string, input: Partial<CustomerInput>): Promise<Customer>;
+    delete(id: string): Promise<void>;
+  };
+  settings: {
+    get(): Promise<Settings>;
+    update(input: SettingsInput): Promise<Settings>;
   };
 }

@@ -1,6 +1,6 @@
 // In-memory typed mock of PosApi. Same money math contract as the API (int paise, GST bps).
 // Latency is simulated so optimistic UI paths are exercised.
-import type { Bill, BillInput, DayClose, InventoryItem, InventoryItemInput, ItemInput, ItemSalesReport, Kot, MenuCategory, MenuItem, Order, OrderInput, OrderItemInput, Outlet, Payment, PaymentInput, PosApi, Principal, RecipeLine, Refund, SalesReport, StockMovement, StockMovementType, TableInfo, TableStatus, TaxReport } from "./types";
+import type { Bill, BillInput, Customer, CustomerInput, DayClose, InventoryItem, InventoryItemInput, ItemInput, ItemSalesReport, Kot, MenuCategory, MenuItem, Order, OrderInput, OrderItemInput, OrderStatus, OrderSummary, Outlet, Payment, PaymentInput, PosApi, Principal, RecipeLine, Refund, SalesReport, Settings, StockMovement, StockMovementType, TableInfo, TableStatus, TaxReport } from "./types";
 import { allOptions, itemPrice } from "./types";
 
 const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -47,6 +47,7 @@ export const TABLE_TRANSITIONS: Record<TableStatus, TableStatus[]> = {
 };
 const MOCK_OUTLET: Outlet = { id: "mock-outlet", code: "MAIN", name: "Spice Route · Koramangala", isActive: true };
 const MOCK_PRINCIPAL: Principal ={ userId: "mock-user", tenantId: "mock-tenant", roles: ["owner"], permissions: ["menu.read", "menu.write", "orders.write", "bills.write", "payments.write"] };
+const MOCK_SETTINGS: Settings = { id: "mock-tenant", name: "Spice Route", gstin: "29ABCDE1234F1Z5", currency: "INR", timezone: "Asia/Kolkata", slug: "demo" };
 
 /** Pure pricing — shared contract with the API (T-102): unit = price + variant + options; tax per line, half CGST/half SGST. */
 export function priceLine(item: MenuItem, input: OrderItemInput) {
@@ -67,6 +68,9 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
   const kotListeners = new Set<(t: ReturnType<typeof kotTicket>) => void>();
   const kotTicket = (k: Kot, o: Order) => ({ ...k, orderNo: o.orderNo, tableRef: o.tableRef, items: o.items.filter((i) => k.itemIds.includes(i.id)).map((i) => ({ id: i.id, name: i.name, qty: i.qty, variantName: i.variantName, notes: i.notes })) });
   const emitKot = (k: Kot, o: Order) => { const t = kotTicket(k, o); for (const fn of kotListeners) fn(t); };
+  // Basic CRM (T-109): a phone book.
+  const customers = new Map<string, Customer>();
+  let custSeq = 1;
   // Basic inventory (T-107): stock + a manual ledger + recipe-based auto-deduction on KOT send.
   const inventoryItems = new Map<string, InventoryItem>();
   const stockMovements: StockMovement[] = [];
@@ -134,7 +138,7 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
   return {
     mode: "mock",
     auth: { login: async () => (await wait(latency), MOCK_PRINCIPAL), me: async () => MOCK_PRINCIPAL, logout: async () => {} },
-    outlets: { list: async () => [MOCK_OUTLET], current: async () => MOCK_OUTLET },
+    outlets: { list: async () => [MOCK_OUTLET], current: async () => MOCK_OUTLET, async update(_id, input) { await wait(latency); Object.assign(MOCK_OUTLET, input); return { ...MOCK_OUTLET }; } },
     menu: {
       categories: async () => (await wait(latency), structuredClone(categories)),
       items: async () => (await wait(latency), structuredClone(menuItems)),
@@ -162,6 +166,15 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
       },
     },
     orders: {
+      async list(f = {}) {
+        await wait(latency / 2);
+        const rows: OrderSummary[] = [...orders.values()]
+          .filter((o) => !f.status || o.status === f.status)
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .slice(0, f.limit ?? 50)
+          .map((o) => ({ id: o.id, orderNo: o.orderNo, type: o.type, status: o.status, tableId: o.tableId, tableRef: o.tableRef, table: o.table ? { id: o.table.id, code: o.table.code } : null, subtotal: o.subtotal, taxTotal: o.taxTotal, discount: o.discount, total: o.total, itemCount: o.items.length, kotCount: o.kots.length, createdAt: o.createdAt }));
+        return rows;
+      },
       create: createOrderFromInput,
       async get(id) { await wait(latency / 2); const o = orders.get(id); if (!o) throw new Error("Order not found"); return structuredClone(o); },
       async replaceItems(id, items) {
@@ -400,6 +413,35 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
         recipeLines.set(menuItemId, next);
         return structuredClone(next);
       },
+    },
+    customers: {
+      async list(q) {
+        await wait(latency / 2);
+        const rows = [...customers.values()].filter((c) => !q || c.name.toLowerCase().includes(q.toLowerCase()) || c.phone.includes(q)).sort((a, b) => a.name.localeCompare(b.name));
+        return structuredClone(rows);
+      },
+      async create(input: CustomerInput) {
+        await wait(latency);
+        if ([...customers.values()].some((c) => c.phone === input.phone)) throw new Error(`A customer with phone ${input.phone} already exists (409)`);
+        const c: Customer = { id: `cust-${custSeq++}`, name: input.name, phone: input.phone, email: input.email ?? null, notes: input.notes ?? null, createdAt: now() };
+        customers.set(c.id, c);
+        return structuredClone(c);
+      },
+      async update(id, input) {
+        await wait(latency);
+        const c = customers.get(id); if (!c) throw new Error("Customer not found");
+        if (input.phone && [...customers.values()].some((x) => x.phone === input.phone && x.id !== id)) throw new Error(`A customer with phone ${input.phone} already exists (409)`);
+        Object.assign(c, input);
+        return structuredClone(c);
+      },
+      async delete(id) {
+        await wait(latency);
+        customers.delete(id);
+      },
+    },
+    settings: {
+      async get() { await wait(latency / 2); return { ...MOCK_SETTINGS }; },
+      async update(input) { await wait(latency); Object.assign(MOCK_SETTINGS, input); return { ...MOCK_SETTINGS }; },
     },
   };
 }
