@@ -39,6 +39,18 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   );
 }
 
+export function useReports(from: string, to: string) {
+  const api = useApi();
+  const sales = useQuery({ queryKey: ["reports", "sales", from, to], queryFn: () => api.reports.sales(from, to) });
+  const items = useQuery({ queryKey: ["reports", "items", from, to], queryFn: () => api.reports.items(from, to) });
+  const tax = useQuery({ queryKey: ["reports", "tax", from, to], queryFn: () => api.reports.tax(from, to) });
+  return {
+    sales: sales.data, items: items.data?.items ?? [], tax: tax.data,
+    loading: sales.isPending || items.isPending || tax.isPending,
+    error: sales.error ?? items.error ?? tax.error,
+  };
+}
+
 export function useMenu() {
   const api = useApi();
   const categories = useQuery({ queryKey: ["menu", "categories"], queryFn: api.menu.categories });

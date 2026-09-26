@@ -1,6 +1,6 @@
 // In-memory typed mock of PosApi. Same money math contract as the API (int paise, GST bps).
 // Latency is simulated so optimistic UI paths are exercised.
-import type { Bill, BillInput, DayClose, ItemInput, Kot, MenuCategory, MenuItem, Order, OrderInput, OrderItemInput, Outlet, Payment, PaymentInput, PosApi, Principal, Refund, TableInfo, TableStatus } from "./types";
+import type { Bill, BillInput, DayClose, ItemInput, ItemSalesReport, Kot, MenuCategory, MenuItem, Order, OrderInput, OrderItemInput, Outlet, Payment, PaymentInput, PosApi, Principal, Refund, SalesReport, TableInfo, TableStatus, TaxReport } from "./types";
 import { allOptions, itemPrice } from "./types";
 
 const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -278,6 +278,47 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
           lines: b.lines ?? [], totals: { subtotal: b.subtotal, discount: b.discount, taxable: b.taxable ?? 0, cgst: b.cgst ?? 0, sgst: b.sgst ?? 0, taxTotal: b.taxTotal, tip: b.tip, roundOff: b.roundOff, total: b.total, paid: b.paidTotal ?? 0, refunded: b.refundTotal ?? 0, due: b.due ?? 0 },
           taxSummary: [...byRate].map(([taxRateBps, r]) => ({ taxRateBps, ...r })), payments: b.payments.map((p) => ({ mode: p.mode, amount: p.amount, tendered: p.tendered, change: p.change, reference: p.reference })), footer: "Thank you! Visit again.",
         };
+      },
+    },
+    reports: {
+      // Generalises dayClose's single-date aggregation to a [from, to] range; same money fields.
+      async sales(from, to) {
+        await wait(latency / 2);
+        const inRange = [...bills.values()].filter((b) => { const d = b.businessDate ?? b.createdAt?.slice(0, 10) ?? ""; return d >= from && d <= to; });
+        const settled = inRange.filter((b) => b.status !== "VOID" && b.status !== "DRAFT");
+        const voids = inRange.filter((b) => b.status === "VOID").length;
+        const sum = (f: (b: Bill) => number) => settled.reduce((s, b) => s + f(b), 0);
+        const byMode: SalesReport["byMode"] = {};
+        for (const b of settled) for (const p of b.payments) { const m = (byMode[p.mode] ??= { collected: 0, refunded: 0, count: 0 }); m.collected += p.amount; m.count++; m.refunded += refunds.filter((r) => r.paymentId === p.id).reduce((s, r) => s + r.amount, 0); }
+        return {
+          outletId: MOCK_OUTLET.id, from, to,
+          bills: settled.length, orders: new Set(settled.map((b) => b.orderId)).size,
+          grossSales: sum((b) => b.subtotal), discounts: sum((b) => b.discount), taxableSales: sum((b) => b.taxable ?? 0),
+          cgst: sum((b) => b.cgst ?? 0), sgst: sum((b) => b.sgst ?? 0), taxTotal: sum((b) => b.taxTotal), tips: sum((b) => b.tip),
+          roundOff: sum((b) => b.roundOff), netSales: sum((b) => b.total), collected: sum((b) => b.paidTotal ?? 0), refunded: sum((b) => b.refundTotal ?? 0),
+          byMode, voids,
+        };
+      },
+      async items(from, to) {
+        await wait(latency / 2);
+        const settled = [...bills.values()].filter((b) => { const d = b.businessDate ?? b.createdAt?.slice(0, 10) ?? ""; return d >= from && d <= to && b.status !== "VOID" && b.status !== "DRAFT"; });
+        const byName = new Map<string, { qty: number; grossAmount: number; discount: number; taxable: number; tax: number }>();
+        for (const b of settled) for (const l of b.lines ?? []) {
+          const r = byName.get(l.name) ?? { qty: 0, grossAmount: 0, discount: 0, taxable: 0, tax: 0 };
+          r.qty += l.qty; r.grossAmount += l.lineTotal; r.discount += l.discount; r.taxable += l.taxable; r.tax += l.cgst + l.sgst;
+          byName.set(l.name, r);
+        }
+        const items: ItemSalesReport["items"] = [...byName.entries()].map(([name, r]) => ({ name, ...r, netAmount: r.taxable + r.tax })).sort((a, b) => b.netAmount - a.netAmount);
+        return { outletId: MOCK_OUTLET.id, from, to, items };
+      },
+      async tax(from, to) {
+        await wait(latency / 2);
+        const settled = [...bills.values()].filter((b) => { const d = b.businessDate ?? b.createdAt?.slice(0, 10) ?? ""; return d >= from && d <= to && b.status !== "VOID" && b.status !== "DRAFT"; });
+        const byRate = new Map<number, { taxable: number; cgst: number; sgst: number }>();
+        for (const b of settled) for (const l of b.lines ?? []) { const r = byRate.get(l.taxRateBps) ?? { taxable: 0, cgst: 0, sgst: 0 }; r.taxable += l.taxable; r.cgst += l.cgst; r.sgst += l.sgst; byRate.set(l.taxRateBps, r); }
+        const brackets: TaxReport["brackets"] = [...byRate.entries()].sort((a, b) => a[0] - b[0]).map(([taxRateBps, r]) => ({ taxRateBps, ...r, tax: r.cgst + r.sgst }));
+        const totals = brackets.reduce((s, b) => ({ taxable: s.taxable + b.taxable, cgst: s.cgst + b.cgst, sgst: s.sgst + b.sgst, tax: s.tax + b.tax }), { taxable: 0, cgst: 0, sgst: 0, tax: 0 });
+        return { outletId: MOCK_OUTLET.id, from, to, brackets, totals };
       },
     },
   };

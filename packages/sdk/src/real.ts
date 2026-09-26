@@ -1,6 +1,6 @@
 // Real PosApi over Jim's NestJS API (phase1-backend, /v1). Endpoints that don't exist yet throw
 // NotImplementedError so hybrid mode can route them to the mock until T-101/T-102/T-103 land.
-import type { MenuCategory, MenuItem, ModifierGroup, PosApi, EffectiveMenu, ItemInput, Principal, FloorView, TableInfo, Outlet, KotTicket } from "./types";
+import type { MenuCategory, MenuItem, ModifierGroup, PosApi, EffectiveMenu, ItemInput, Principal, FloorView, TableInfo, Outlet, KotTicket, SalesReport, ItemSalesReport, TaxReport } from "./types";
 import { createClient, type ApiClient } from "./client";
 
 export class NotImplementedError extends Error { constructor(what: string) { super(`${what} is not available on the API yet`); } }
@@ -123,6 +123,11 @@ export function createRealApi(opts: RealApiOptions = {}): PosApi {
     dayClose: {
       get: async (businessDate = new Date().toISOString().slice(0, 10)) => c.get(`/day-close?outletId=${await outlet()}&businessDate=${businessDate}`),
       close: async (businessDate, note) => c.post("/day-close", { outletId: await outlet(), businessDate, note }),
+    },
+    reports: {
+      sales: async (from, to) => c.get<SalesReport>(`/reports/sales?outletId=${await outlet()}&from=${from}&to=${to}`),
+      items: async (from, to) => c.get<ItemSalesReport>(`/reports/items?outletId=${await outlet()}&from=${from}&to=${to}`),
+      tax: async (from, to) => c.get<TaxReport>(`/reports/tax?outletId=${await outlet()}&from=${from}&to=${to}`),
     },
   };
 }

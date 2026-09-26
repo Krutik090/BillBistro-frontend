@@ -65,6 +65,17 @@ export interface Receipt {
   taxSummary: { taxRateBps: number; taxable: Money; cgst: Money; sgst: Money }[]; payments: { mode: PaymentMode; amount: Money; tendered?: Money | null; change?: Money | null; reference?: string | null }[]; footer?: string | null;
 }
 
+/** GET /v1/reports/sales — same shape as DayClose.totals, generalised to a date range. */
+export interface SalesReport {
+  outletId: string; from: string; to: string;
+  bills: number; orders: number; grossSales: Money; discounts: Money; taxableSales: Money; cgst: Money; sgst: Money; taxTotal: Money;
+  tips: Money; roundOff: Money; netSales: Money; collected: Money; refunded: Money; byMode: Record<string, { collected: Money; refunded: Money; count: number }>; voids: number;
+}
+/** GET /v1/reports/items — qty + revenue per menu line (grouped by frozen bill-line name). */
+export interface ItemSalesReport { outletId: string; from: string; to: string; items: { name: string; qty: number; grossAmount: Money; discount: Money; taxable: Money; tax: Money; netAmount: Money }[] }
+/** GET /v1/reports/tax — GST by rate bracket, for filing. */
+export interface TaxReport { outletId: string; from: string; to: string; brackets: { taxRateBps: number; taxable: Money; cgst: Money; sgst: Money; tax: Money }[]; totals: { taxable: Money; cgst: Money; sgst: Money; tax: Money } }
+
 export interface CategoryInput { name: string; description?: string; sortOrder?: number; isActive?: boolean }
 export interface ItemInput {
   categoryId: string; name: string; basePrice: Money; taxRateBps?: number; isVeg?: boolean; isAvailable?: boolean; sku?: string | null; description?: string | null; station?: string | null;
@@ -138,5 +149,10 @@ export interface PosApi {
     get(businessDate?: string): Promise<DayClose>;
     /** 409 while unpaid FINAL bills exist; afterwards finalize/pay on that date → 409. */
     close(businessDate: string, note?: string): Promise<DayClose>;
+  };
+  reports: {
+    sales(from: string, to: string): Promise<SalesReport>;
+    items(from: string, to: string): Promise<ItemSalesReport>;
+    tax(from: string, to: string): Promise<TaxReport>;
   };
 }
