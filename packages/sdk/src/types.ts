@@ -97,14 +97,12 @@ export type StockMovementType = "RECEIVE" | "ADJUST" | "DEDUCT";
 export interface StockMovement { id: string; inventoryItemId?: string; type: StockMovementType; qtyMilli: Milli; balanceMilli: Milli; reason?: string | null; kotId?: string | null; createdAt: string }
 export interface RecipeLine { id: string; menuItemId: string; inventoryItemId: string; qtyMilli: Milli; inventoryItem?: { id: string; name: string; unit: string } }
 export interface LoginInput { tenantSlug: string; email: string; password: string }
-/** Self-serve onboarding (T-106): provisions a tenant + owner + first outlet, then auto-logs in. */
-export interface SignupInput { tenantName: string; tenantSlug: string; ownerName: string; email: string; password: string; outletName?: string }
 export interface Principal { userId: string; tenantId: string; roles: string[]; permissions: string[] }
 
 /** The contract the POS + dashboard build against. Real + mock implement it identically. */
 export interface PosApi {
   readonly mode: "mock" | "real" | "hybrid";
-  auth: { login(input: LoginInput): Promise<Principal>; signup(input: SignupInput): Promise<Principal>; me(): Promise<Principal>; logout(): Promise<void> };
+  auth: { login(input: LoginInput): Promise<Principal>; me(): Promise<Principal>; logout(): Promise<void> };
   outlets: {
     list(): Promise<Outlet[]>;
     /** The outlet this POS is bound to: NEXT_PUBLIC_OUTLET_ID if set, else the first active outlet. */
@@ -136,6 +134,11 @@ export interface PosApi {
     sendKot(orderId: string, orderItemIds: string[], station?: string): Promise<Kot>;
     /** Void the order: open KOTs cancelled, table freed. */
     cancel(id: string, reason: string, version?: number): Promise<Order>;
+  };
+  /** Customer QR ordering (T-108) — no staff session; the caller must supply outletId explicitly (no auth-gated outlet resolution available). */
+  qr: {
+    menu(outletId: string): Promise<EffectiveMenu>;
+    createOrder(input: OrderInput): Promise<Order>;
   };
   kots: {
     /** KDS feed for the current outlet. */

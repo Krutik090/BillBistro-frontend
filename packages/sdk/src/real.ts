@@ -67,7 +67,6 @@ export function createRealApi(opts: RealApiOptions = {}): PosApi {
     mode: "real",
     auth: {
       login: async (input) => (await c.post<{ user: Principal }>("/auth/login", input)).user,
-      signup: async (input) => (await c.post<{ user: Principal }>("/auth/signup", input)).user,
       me: () => c.get("/auth/me"),
       logout: async () => { await c.post("/auth/logout"); },
     },
@@ -105,6 +104,13 @@ export function createRealApi(opts: RealApiOptions = {}): PosApi {
       replaceItems: (id, items, version) => c.patch(`/orders/${id}/items`, { items, version }),
       sendKot: async (orderId, orderItemIds, station) => { const k = normKot(await c.post<KotTicket>(`/orders/${orderId}/kots`, { orderItemIds, station })); return { ...k, itemIds: k.itemIds.length ? k.itemIds : orderItemIds }; },
       cancel: (id, reason, version) => c.post(`/orders/${id}/cancel`, { reason, version }),
+    },
+    // Customer QR ordering (T-108) — no staff session, hits PUBLIC endpoints only. Unlike outlet()/
+    // orders.create, neither of these resolves the outlet via GET /outlets (that requires auth); the
+    // caller (apps/qr) always supplies outletId explicitly, resolved from NEXT_PUBLIC_OUTLET_ID.
+    qr: {
+      menu: (outletId) => c.get<EffectiveMenu>(`/menu/outlets/${outletId}/effective`),
+      createOrder: (input) => c.post("/public/orders", input),
     },
     kots: {
       list: async (f = {}) => { const q = new URLSearchParams({ outletId: await outlet(), ...(f.status ? { status: f.status } : {}), ...(f.station ? { station: f.station } : {}) }); return (await c.get<KotTicket[]>(`/kots?${q}`)).map(normKot); },

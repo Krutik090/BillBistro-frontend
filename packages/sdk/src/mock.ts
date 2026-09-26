@@ -120,10 +120,20 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
     o.total = o.subtotal + o.taxTotal - o.discount;
     return o;
   };
+  /** Shared by orders.create (staff, authenticated) and qr.createOrder (customer, no session) — same logic either way. */
+  async function createOrderFromInput(input: OrderInput): Promise<Order> {
+    await wait(latency);
+    const t = input.tableId ? tables.find((x) => x.id === input.tableId) : undefined;
+    if (input.tableId && (!t || (t.status !== "FREE" && t.status !== "RESERVED"))) throw new Error("Table not free (409)");
+    const o: Order = totals({ id: uid(), orderNo: `#${++orderSeq}`, type: input.type, status: "OPEN", tableId: t?.id ?? null, tableRef: input.tableRef ?? t?.name ?? null, guestCount: input.guestCount ?? null, subtotal: 0, taxTotal: 0, discount: 0, total: 0, version: 1, items: buildItems(input.items, null), kots: [], createdAt: now() });
+    if (t) { t.status = "OCCUPIED"; t.orderId = o.id; t.statusSince = now(); t.version = (t.version ?? 1) + 1; }
+    orders.set(o.id, o);
+    return structuredClone(o);
+  }
 
   return {
     mode: "mock",
-    auth: { login: async () => (await wait(latency), MOCK_PRINCIPAL), signup: async () => (await wait(latency), MOCK_PRINCIPAL), me: async () => MOCK_PRINCIPAL, logout: async () => {} },
+    auth: { login: async () => (await wait(latency), MOCK_PRINCIPAL), me: async () => MOCK_PRINCIPAL, logout: async () => {} },
     outlets: { list: async () => [MOCK_OUTLET], current: async () => MOCK_OUTLET },
     menu: {
       categories: async () => (await wait(latency), structuredClone(categories)),
@@ -152,15 +162,7 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
       },
     },
     orders: {
-      async create(input) {
-        await wait(latency);
-        const t = input.tableId ? tables.find((x) => x.id === input.tableId) : undefined;
-        if (input.tableId && (!t || (t.status !== "FREE" && t.status !== "RESERVED"))) throw new Error("Table not free (409)");
-        const o: Order = totals({ id: uid(), orderNo: `#${++orderSeq}`, type: input.type, status: "OPEN", tableId: t?.id ?? null, tableRef: input.tableRef ?? t?.name ?? null, guestCount: input.guestCount ?? null, subtotal: 0, taxTotal: 0, discount: 0, total: 0, version: 1, items: buildItems(input.items, null), kots: [], createdAt: now() });
-        if (t) { t.status = "OCCUPIED"; t.orderId = o.id; t.statusSince = now(); t.version = (t.version ?? 1) + 1; }
-        orders.set(o.id, o);
-        return structuredClone(o);
-      },
+      create: createOrderFromInput,
       async get(id) { await wait(latency / 2); const o = orders.get(id); if (!o) throw new Error("Order not found"); return structuredClone(o); },
       async replaceItems(id, items) {
         await wait(latency);
@@ -186,6 +188,13 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
         emitKot(kot, o);
         return structuredClone(kot);
       },
+    },
+    qr: {
+      async menu() {
+        await wait(latency);
+        return { outlet: MOCK_OUTLET, generatedAt: now(), categories: categories.filter((c) => c.isActive).map((c) => ({ ...c, items: menuItems.filter((i) => i.categoryId === c.id && i.isAvailable) })), combos: [] };
+      },
+      createOrder: createOrderFromInput,
     },
     kots: {
       list: async (f = {}) => { await wait(latency / 2); return [...orders.values()].flatMap((o) => o.kots.filter((k) => (!f.status || k.status === f.status) && (!f.station || k.station === f.station)).map((k) => kotTicket(k, o))); },

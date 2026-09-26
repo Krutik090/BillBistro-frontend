@@ -11,11 +11,14 @@ export function ApiProvider({ children }: { children: React.ReactNode }) {
   return <ApiContext.Provider value={api}><AuthGate>{children}</AuthGate></ApiContext.Provider>;
 }
 
+/** Single-restaurant deployment: the tenant slug is deployment config, not something a human types. */
+const TENANT_SLUG = process.env.NEXT_PUBLIC_TENANT_SLUG || "demo";
+
 function AuthGate({ children }: { children: React.ReactNode }) {
   const api = useApi();
   const [ready, setReady] = React.useState(api.mode === "mock");
   const [checked, setChecked] = React.useState(api.mode === "mock");
-  const [form, setForm] = React.useState({ tenantSlug: "demo", email: "owner@demo.local", password: "" });
+  const [form, setForm] = React.useState({ email: "owner@demo.local", password: "" });
   const [err, setErr] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   React.useEffect(() => {
@@ -26,15 +29,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   if (!checked) return <div className="flex h-dvh items-center justify-center text-sm text-muted">Connecting to {api.mode} API…</div>;
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setBusy(true); setErr(null);
-    try { await api.auth.login(form); setReady(true); } catch (x) { setErr(x instanceof ApiError ? x.message : String(x)); } finally { setBusy(false); }
+    try { await api.auth.login({ tenantSlug: TENANT_SLUG, ...form }); setReady(true); } catch (x) { setErr(x instanceof ApiError ? x.message : String(x)); } finally { setBusy(false); }
   };
   return (
     <div className="flex h-dvh items-center justify-center bg-background">
       <form onSubmit={submit} className="flex w-[360px] flex-col gap-4 rounded-2xl border border-border bg-surface-raised p-6 shadow-2">
         <div className="flex items-center gap-3"><LogoMark size={36} /><div><div className="font-display text-lg font-semibold">Sign in</div><div className="text-xs text-muted">{api.mode} mode · kitchen display</div></div></div>
-        <Input label="Restaurant" value={form.tenantSlug} onChange={(e) => setForm({ ...form, tenantSlug: e.target.value })} />
-        <Input label="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-        <Input label="Password" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoFocus />
+        <Input label="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} autoFocus />
+        <Input label="Password" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
         {err && <p className="text-sm text-danger">{err}</p>}
         <Button size="lg" type="submit" disabled={busy || !form.password}>{busy ? "Signing in…" : "Sign in"}</Button>
       </form>
