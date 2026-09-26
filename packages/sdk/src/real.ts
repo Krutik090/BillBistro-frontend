@@ -108,6 +108,19 @@ export function createRealApi(opts: RealApiOptions = {}): PosApi {
     kots: {
       list: async (f = {}) => { const q = new URLSearchParams({ outletId: await outlet(), ...(f.status ? { status: f.status } : {}), ...(f.station ? { station: f.station } : {}) }); return (await c.get<KotTicket[]>(`/kots?${q}`)).map(normKot); },
       setStatus: async (id, status) => normKot(await c.patch<KotTicket>(`/kots/${id}/status`, { status })),
+      // Server-Sent Events: one KOT row per create/status-change/cancel (T-105). EventSource can't
+      // send an Authorization header, so this relies on the httpOnly cookie session (withCredentials).
+      subscribe: (onKot) => {
+        let closed = false;
+        let es: EventSource | null = null;
+        void (async () => {
+          const outletId = await outlet();
+          if (closed) return;
+          es = new EventSource(`${c.origin}/v1/kots/stream?outletId=${outletId}`, { withCredentials: true });
+          es.addEventListener("kot", (e) => onKot(normKot(JSON.parse((e as MessageEvent).data))));
+        })();
+        return () => { closed = true; es?.close(); };
+      },
     },
     billing: {
       // T-103 @ 746488d — server is the money authority (per-line tax, cgst floor/sgst rest, exact split shares).

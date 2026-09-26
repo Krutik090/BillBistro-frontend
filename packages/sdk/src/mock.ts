@@ -63,6 +63,10 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
   const bills = new Map<string, Bill>();
   const refunds: Refund[] = [];
   const closedDays = new Map<string, string>();
+  // KDS realtime (T-105): in-memory pub/sub standing in for the real SSE stream in mock mode.
+  const kotListeners = new Set<(t: ReturnType<typeof kotTicket>) => void>();
+  const kotTicket = (k: Kot, o: Order) => ({ ...k, orderNo: o.orderNo, tableRef: o.tableRef, items: o.items.filter((i) => k.itemIds.includes(i.id)).map((i) => ({ id: i.id, name: i.name, qty: i.qty, variantName: i.variantName, notes: i.notes })) });
+  const emitKot = (k: Kot, o: Order) => { const t = kotTicket(k, o); for (const fn of kotListeners) fn(t); };
   let orderSeq = 1041, kotSeq = 17, billSeq = 1041;
   // Menu is mutable per api instance (menu management UI edits it).
   const tables: TableInfo[] = structuredClone(MOCK_TABLES);
@@ -145,7 +149,7 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
         await wait(latency);
         const o = orders.get(id); if (!o) throw new Error("Order not found");
         if (version !== undefined && version !== o.version) throw new Error("Stale order version (409)");
-        o.status = "CANCELLED"; o.version++; for (const k of o.kots) if (k.status === "PENDING" || k.status === "PREPARING") k.status = "CANCELLED";
+        o.status = "CANCELLED"; o.version++; for (const k of o.kots) if (k.status === "PENDING" || k.status === "PREPARING") { k.status = "CANCELLED"; emitKot(k, o); }
         const t = tables.find((x) => x.id === o.tableId); if (t) { t.status = "FREE"; t.orderId = null; t.version = (t.version ?? 1) + 1; }
         void reason; return structuredClone(o);
       },
@@ -155,17 +159,19 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
         const kot: Kot = { id: uid(), orderId, kotNo: `K-${++kotSeq}`, status: "PENDING", station: station ?? null, itemIds: orderItemIds, createdAt: now() };
         for (const l of o.items) if (orderItemIds.includes(l.id)) l.kotId = kot.id;
         o.kots.push(kot); o.version++;
+        emitKot(kot, o);
         return structuredClone(kot);
       },
     },
     kots: {
-      list: async (f = {}) => { await wait(latency / 2); return [...orders.values()].flatMap((o) => o.kots.filter((k) => (!f.status || k.status === f.status) && (!f.station || k.station === f.station)).map((k) => ({ ...k, orderNo: o.orderNo, tableRef: o.tableRef, items: o.items.filter((i) => k.itemIds.includes(i.id)).map((i) => ({ id: i.id, name: i.name, qty: i.qty, variantName: i.variantName, notes: i.notes })) }))); },
+      list: async (f = {}) => { await wait(latency / 2); return [...orders.values()].flatMap((o) => o.kots.filter((k) => (!f.status || k.status === f.status) && (!f.station || k.station === f.station)).map((k) => kotTicket(k, o))); },
       async setStatus(id, status) {
         await wait(latency / 2);
         const legal: Record<string, string[]> = { PENDING: ["PREPARING", "CANCELLED"], PREPARING: ["READY", "CANCELLED"], READY: ["SERVED", "PREPARING"], SERVED: [], CANCELLED: [] };
-        for (const o of orders.values()) { const k = o.kots.find((x) => x.id === id); if (k) { if (!legal[k.status].includes(status)) throw new Error(`Illegal KOT transition ${k.status} → ${status} (422)`); k.status = status; return { ...k, orderNo: o.orderNo, tableRef: o.tableRef }; } }
+        for (const o of orders.values()) { const k = o.kots.find((x) => x.id === id); if (k) { if (!legal[k.status].includes(status)) throw new Error(`Illegal KOT transition ${k.status} → ${status} (422)`); k.status = status; const t = kotTicket(k, o); emitKot(k, o); return t; } }
         throw new Error("KOT not found");
       },
+      subscribe(onKot) { kotListeners.add(onKot); return () => kotListeners.delete(onKot); },
     },
     dayClose: {
       async get(businessDate) {

@@ -131,6 +131,8 @@ export interface PosApi {
     list(filter?: { status?: KotStatus; station?: string }): Promise<KotTicket[]>;
     /** PENDING→PREPARING→READY→SERVED (READY→PREPARING allowed; CANCELLED from PENDING/PREPARING). */
     setStatus(id: string, status: KotStatus): Promise<KotTicket>;
+    /** Live push of a KOT row on create/status-change/cancel for the current outlet. Returns an unsubscribe function. */
+    subscribe(onKot: (ticket: KotTicket) => void): () => void;
   };
   billing: {
     create(input: BillInput): Promise<Bill>;
