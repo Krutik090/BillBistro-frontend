@@ -17,7 +17,7 @@ const nav = [
 ];
 
 /** Single-restaurant deployment — set this once you know the real name; "Spice Route · Koramangala" was always a placeholder. */
-const RESTAURANT_NAME = process.env.NEXT_PUBLIC_RESTAURANT_NAME || "Spice Route · Koramangala";
+const RESTAURANT_NAME = process.env.NEXT_PUBLIC_RESTAURANT_NAME || "Isara's · Vallabh Vidyanagar, Anand";
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

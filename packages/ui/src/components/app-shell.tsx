@@ -25,7 +25,7 @@ const DefaultLink = (p: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: 
 export function LogoMark({ size = 40 }: { size?: number }) {
   return (
     <div className="flex items-center justify-center rounded-[12px] bg-primary font-display font-bold text-primary-foreground shadow-glow" style={{ width: size, height: size, fontSize: size / 2 }}>
-      B
+      I
     </div>
   );
 }
@@ -39,7 +39,7 @@ export function AppShell({ app, tenant, nav, activeHref, variant = "rail", heade
           <LogoMark size={rail ? 40 : 32} />
           {!rail && (
             <div className="leading-tight">
-              <div className="font-display font-semibold">BillBistro</div>
+              <div className="font-display font-semibold">Isara's</div>
               {tenant && <div className="text-xs text-muted">{tenant}</div>}
             </div>
           )}

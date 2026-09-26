@@ -1,12 +1,12 @@
 {
-  "name": "BillBistro POS",
-  "short_name": "BillBistro",
+  "name": "Isara's POS",
+  "short_name": "Isara's",
   "description": "Touch-first restaurant billing",
   "start_url": "/",
   "display": "standalone",
   "orientation": "landscape",
-  "background_color": "#0A0B10",
-  "theme_color": "#0A0B10",
+  "background_color": "#0C0704",
+  "theme_color": "#0C0704",
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]

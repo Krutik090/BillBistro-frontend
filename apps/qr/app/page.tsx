@@ -9,7 +9,7 @@ import { Badge, Button, LogoMark, ThemeToggle, cn } from "@billbistro/ui";
 import { itemPrice, type MenuItem } from "@billbistro/sdk";
 import { ApiProvider, useQrMenu, useSubmitOrder } from "../lib/api";
 
-const RESTAURANT_NAME = process.env.NEXT_PUBLIC_RESTAURANT_NAME || "Spice Route";
+const RESTAURANT_NAME = process.env.NEXT_PUBLIC_RESTAURANT_NAME || "Isara's";
 const inr = (p: number) => `₹${(p / 100).toLocaleString("en-IN", { minimumFractionDigits: p % 100 ? 2 : 0 })}`;
 
 export default function QrPage() {

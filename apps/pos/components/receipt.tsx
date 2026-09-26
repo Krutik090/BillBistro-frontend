@@ -44,7 +44,7 @@ export function ReceiptSheet() {
           {r.payments.map((p, i) => <Row key={i} k={`Paid · ${p.mode}${p.reference ? ` ${p.reference}` : ""}${p.change ? ` (change ${inr(p.change)})` : ""}`} v={inr(p.amount)} />)}
           {r.totals.due > 0 && <Row k="Due" v={inr(r.totals.due)} />}
           <Hr />
-          <div className="text-center text-[11px]">{r.footer ?? "Thank you! Visit again."}<br />Powered by BillBistro</div>
+          <div className="text-center text-[11px]">{r.footer ?? "Thank you! Visit again."}<br />Isara's Restro-Café</div>
         </div>
       )}
     </Drawer>
