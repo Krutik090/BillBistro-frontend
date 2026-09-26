@@ -100,7 +100,7 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
 
   return {
     mode: "mock",
-    auth: { login: async () => (await wait(latency), MOCK_PRINCIPAL), me: async () => MOCK_PRINCIPAL, logout: async () => {} },
+    auth: { login: async () => (await wait(latency), MOCK_PRINCIPAL), signup: async () => (await wait(latency), MOCK_PRINCIPAL), me: async () => MOCK_PRINCIPAL, logout: async () => {} },
     outlets: { list: async () => [MOCK_OUTLET], current: async () => MOCK_OUTLET },
     menu: {
       categories: async () => (await wait(latency), structuredClone(categories)),

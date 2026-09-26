@@ -13,28 +13,60 @@ export function ApiProvider({ children }: { children: React.ReactNode }) {
   return <ApiContext.Provider value={api}><QueryClientProvider client={qc}><AuthGate>{children}</AuthGate></QueryClientProvider></ApiContext.Provider>;
 }
 
+const slugify = (s: string) => s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
 function AuthGate({ children }: { children: React.ReactNode }) {
   const api = useApi();
   const me = useQuery({ queryKey: ["auth", "me"], queryFn: api.auth.me, retry: false, staleTime: Infinity });
-  const [form, setForm] = React.useState({ tenantSlug: "demo", email: "owner@demo.local", password: "" });
+  const [screen, setScreen] = React.useState<"signin" | "signup">("signin");
+  const [login, setLogin] = React.useState({ tenantSlug: "demo", email: "owner@demo.local", password: "" });
+  const [signup, setSignup] = React.useState({ tenantName: "", tenantSlug: "", ownerName: "", email: "", password: "", outletName: "" });
   const [err, setErr] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   if (api.mode === "mock" || me.data) return <>{children}</>;
   if (me.isPending) return <div className="flex h-dvh items-center justify-center text-sm text-muted">Connecting to {api.mode} API…</div>;
-  const submit = async (e: React.FormEvent) => {
+
+  const submitLogin = async (e: React.FormEvent) => {
     e.preventDefault(); setBusy(true); setErr(null);
-    try { await api.auth.login(form); await me.refetch(); } catch (x) { setErr(x instanceof ApiError ? x.message : String(x)); } finally { setBusy(false); }
+    try { await api.auth.login(login); await me.refetch(); } catch (x) { setErr(x instanceof ApiError ? x.message : String(x)); } finally { setBusy(false); }
   };
+  const submitSignup = async (e: React.FormEvent) => {
+    e.preventDefault(); setBusy(true); setErr(null);
+    try { await api.auth.signup({ ...signup, outletName: signup.outletName || undefined }); await me.refetch(); } catch (x) { setErr(x instanceof ApiError ? x.message : String(x)); } finally { setBusy(false); }
+  };
+  const signupValid = signup.tenantName && signup.tenantSlug && signup.ownerName && signup.email && signup.password.length >= 8;
+
   return (
     <div className="flex h-dvh items-center justify-center bg-background">
-      <form onSubmit={submit} className="flex w-[360px] flex-col gap-4 rounded-2xl border border-border bg-surface-raised p-6 shadow-2">
-        <div className="flex items-center gap-3"><LogoMark size={36} /><div><div className="font-display text-lg font-semibold">Sign in</div><div className="text-xs text-muted">{api.mode} mode · API cookie session</div></div></div>
-        <Input label="Restaurant" value={form.tenantSlug} onChange={(e) => setForm({ ...form, tenantSlug: e.target.value })} />
-        <Input label="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-        <Input label="Password" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoFocus />
-        {err && <p className="text-sm text-danger">{err}</p>}
-        <Button size="lg" type="submit" disabled={busy || !form.password}>{busy ? "Signing in…" : "Sign in"}</Button>
-      </form>
+      <div className="flex w-[400px] flex-col gap-4 rounded-2xl border border-border bg-surface-raised p-6 shadow-2">
+        <div className="flex items-center gap-3">
+          <LogoMark size={36} />
+          <div><div className="font-display text-lg font-semibold">{screen === "signin" ? "Sign in" : "Create your restaurant"}</div><div className="text-xs text-muted">{api.mode} mode · API cookie session</div></div>
+        </div>
+        {screen === "signin" ? (
+          <form onSubmit={submitLogin} className="flex flex-col gap-4">
+            <Input label="Restaurant" value={login.tenantSlug} onChange={(e) => setLogin({ ...login, tenantSlug: e.target.value })} />
+            <Input label="Email" type="email" value={login.email} onChange={(e) => setLogin({ ...login, email: e.target.value })} />
+            <Input label="Password" type="password" value={login.password} onChange={(e) => setLogin({ ...login, password: e.target.value })} autoFocus />
+            {err && <p className="text-sm text-danger">{err}</p>}
+            <Button size="lg" type="submit" disabled={busy || !login.password}>{busy ? "Signing in…" : "Sign in"}</Button>
+          </form>
+        ) : (
+          <form onSubmit={submitSignup} className="flex flex-col gap-4">
+            <Input label="Restaurant name" value={signup.tenantName} onChange={(e) => setSignup({ ...signup, tenantName: e.target.value, tenantSlug: signup.tenantSlug || slugify(e.target.value) })} />
+            <Input label="Restaurant URL (used to sign in)" value={signup.tenantSlug} onChange={(e) => setSignup({ ...signup, tenantSlug: slugify(e.target.value) })} />
+            <Input label="Your name" value={signup.ownerName} onChange={(e) => setSignup({ ...signup, ownerName: e.target.value })} />
+            <Input label="Email" type="email" value={signup.email} onChange={(e) => setSignup({ ...signup, email: e.target.value })} />
+            <Input label="Password" type="password" value={signup.password} onChange={(e) => setSignup({ ...signup, password: e.target.value })} />
+            <Input label="First outlet name (optional)" value={signup.outletName} onChange={(e) => setSignup({ ...signup, outletName: e.target.value })} />
+            {err && <p className="text-sm text-danger">{err}</p>}
+            <Button size="lg" type="submit" disabled={busy || !signupValid}>{busy ? "Creating…" : "Create account"}</Button>
+          </form>
+        )}
+        <button type="button" onClick={() => { setScreen(screen === "signin" ? "signup" : "signin"); setErr(null); }} className="text-center text-xs text-muted hover:text-foreground">
+          {screen === "signin" ? "New restaurant? Create an account" : "Already have an account? Sign in"}
+        </button>
+      </div>
     </div>
   );
 }

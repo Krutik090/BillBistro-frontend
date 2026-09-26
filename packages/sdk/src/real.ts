@@ -67,6 +67,7 @@ export function createRealApi(opts: RealApiOptions = {}): PosApi {
     mode: "real",
     auth: {
       login: async (input) => (await c.post<{ user: Principal }>("/auth/login", input)).user,
+      signup: async (input) => (await c.post<{ user: Principal }>("/auth/signup", input)).user,
       me: () => c.get("/auth/me"),
       logout: async () => { await c.post("/auth/logout"); },
     },
