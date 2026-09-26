@@ -1,7 +1,7 @@
 "use client";
 import * as React from "react";
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { createPosApi, ApiError, type OrderItemInput, type PosApi } from "@billbistro/sdk";
+import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { createPosApi, ApiError, type OrderItemInput, type OrderStatus, type PosApi } from "@billbistro/sdk";
 import { Button, Input, LogoMark } from "@billbistro/ui";
 import { usePos } from "./store";
 import type { CartLine } from "./calc";
@@ -52,6 +52,21 @@ export const useMenu = () => {
 };
 export const useOutlet = () => { const api = useApi(); return useQuery({ queryKey: ["outlet"], queryFn: api.outlets.current, staleTime: Infinity }); };
 export const useTables = () => { const api = useApi(); return useQuery({ queryKey: ["tables"], queryFn: api.tables.list, staleTime: 5_000 }); };
+
+/** Polls so the list stays current without a manual refresh. */
+export function useLiveOrders(status: OrderStatus) {
+  const api = useApi();
+  const q = useQuery({ queryKey: ["orders", "list", status], queryFn: () => api.orders.list({ status, limit: 200 }), refetchInterval: 8_000 });
+  return { orders: q.data ?? [], loading: q.isPending, error: q.error };
+}
+
+export function useOrderActions() {
+  const api = useApi(); const qc = useQueryClient();
+  const inv = () => qc.invalidateQueries({ queryKey: ["orders"] });
+  return {
+    cancel: useMutation({ mutationFn: ({ id, reason }: { id: string; reason: string }) => api.orders.cancel(id, reason), onSuccess: inv }),
+  };
+}
 
 const toInput = (l: CartLine): OrderItemInput => ({ itemId: l.item.id, qty: l.qty, variantId: l.variantId, modifierIds: l.modifierIds, notes: l.notes, clientLineId: l.serverId ?? l.lineId });
 
