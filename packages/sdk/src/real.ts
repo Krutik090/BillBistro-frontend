@@ -1,6 +1,6 @@
 // Real PosApi over Jim's NestJS API (phase1-backend, /v1). Endpoints that don't exist yet throw
 // NotImplementedError so hybrid mode can route them to the mock until T-101/T-102/T-103 land.
-import type { MenuCategory, MenuItem, ModifierGroup, PosApi, EffectiveMenu, ItemInput, Principal, FloorView, TableInfo, Outlet, KotTicket, SalesReport, ItemSalesReport, TaxReport } from "./types";
+import type { MenuCategory, MenuItem, ModifierGroup, PosApi, EffectiveMenu, ItemInput, Principal, FloorView, TableInfo, Outlet, KotTicket, SalesReport, ItemSalesReport, TaxReport, InventoryItem, InventoryItemInput, StockMovement, RecipeLine } from "./types";
 import { createClient, type ApiClient } from "./client";
 
 export class NotImplementedError extends Error { constructor(what: string) { super(`${what} is not available on the API yet`); } }
@@ -142,6 +142,15 @@ export function createRealApi(opts: RealApiOptions = {}): PosApi {
       sales: async (from, to) => c.get<SalesReport>(`/reports/sales?outletId=${await outlet()}&from=${from}&to=${to}`),
       items: async (from, to) => c.get<ItemSalesReport>(`/reports/items?outletId=${await outlet()}&from=${from}&to=${to}`),
       tax: async (from, to) => c.get<TaxReport>(`/reports/tax?outletId=${await outlet()}&from=${from}&to=${to}`),
+    },
+    inventory: {
+      list: (lowStockOnly) => c.get<InventoryItem[]>(`/inventory/items${lowStockOnly ? "?lowStockOnly=true" : ""}`),
+      create: (input) => c.post<InventoryItem>("/inventory/items", input),
+      update: (id, input) => c.patch<InventoryItem>(`/inventory/items/${id}`, input),
+      adjust: (id, input) => c.post<StockMovement>(`/inventory/items/${id}/adjust`, input),
+      movements: (id) => c.get<StockMovement[]>(`/inventory/items/${id}/movements`),
+      recipe: (menuItemId) => c.get<RecipeLine[]>(`/inventory/recipes?menuItemId=${menuItemId}`),
+      setRecipe: (menuItemId, lines) => c.put<RecipeLine[]>(`/inventory/recipes/${menuItemId}`, { lines }),
     },
   };
 }

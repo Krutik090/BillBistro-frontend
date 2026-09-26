@@ -1,6 +1,6 @@
 // In-memory typed mock of PosApi. Same money math contract as the API (int paise, GST bps).
 // Latency is simulated so optimistic UI paths are exercised.
-import type { Bill, BillInput, DayClose, ItemInput, ItemSalesReport, Kot, MenuCategory, MenuItem, Order, OrderInput, OrderItemInput, Outlet, Payment, PaymentInput, PosApi, Principal, Refund, SalesReport, TableInfo, TableStatus, TaxReport } from "./types";
+import type { Bill, BillInput, DayClose, InventoryItem, InventoryItemInput, ItemInput, ItemSalesReport, Kot, MenuCategory, MenuItem, Order, OrderInput, OrderItemInput, Outlet, Payment, PaymentInput, PosApi, Principal, RecipeLine, Refund, SalesReport, StockMovement, StockMovementType, TableInfo, TableStatus, TaxReport } from "./types";
 import { allOptions, itemPrice } from "./types";
 
 const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -67,6 +67,29 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
   const kotListeners = new Set<(t: ReturnType<typeof kotTicket>) => void>();
   const kotTicket = (k: Kot, o: Order) => ({ ...k, orderNo: o.orderNo, tableRef: o.tableRef, items: o.items.filter((i) => k.itemIds.includes(i.id)).map((i) => ({ id: i.id, name: i.name, qty: i.qty, variantName: i.variantName, notes: i.notes })) });
   const emitKot = (k: Kot, o: Order) => { const t = kotTicket(k, o); for (const fn of kotListeners) fn(t); };
+  // Basic inventory (T-107): stock + a manual ledger + recipe-based auto-deduction on KOT send.
+  const inventoryItems = new Map<string, InventoryItem>();
+  const stockMovements: StockMovement[] = [];
+  const recipeLines = new Map<string, RecipeLine[]>(); // keyed by menuItemId
+  let invSeq = 1, moveSeq = 1, recipeSeq = 1;
+  const move = (inventoryItemId: string, type: StockMovementType, qtyMilli: number, balanceMilli: number, reason?: string, kotId?: string) => {
+    const m: StockMovement = { id: `mv-${moveSeq++}`, inventoryItemId, type, qtyMilli, balanceMilli, reason: reason ?? null, kotId: kotId ?? null, createdAt: now() };
+    stockMovements.push(m);
+    return m;
+  };
+  /** Deducts recipe-linked stock for the lines just sent to a KOT — mirrors OrdersService.createKot's deductStockForKot. */
+  const deductForKot = (kotId: string, o: Order, orderItemIds: string[]) => {
+    const byInventory = new Map<string, number>();
+    for (const l of o.items) {
+      if (!orderItemIds.includes(l.id)) continue;
+      for (const r of recipeLines.get(l.itemId) ?? []) byInventory.set(r.inventoryItemId, (byInventory.get(r.inventoryItemId) ?? 0) + r.qtyMilli * l.qty);
+    }
+    for (const [inventoryItemId, amount] of byInventory) {
+      const inv = inventoryItems.get(inventoryItemId); if (!inv || amount <= 0) continue;
+      inv.stockMilli -= amount;
+      move(inventoryItemId, "DEDUCT", -amount, inv.stockMilli, "KOT sent", kotId);
+    }
+  };
   let orderSeq = 1041, kotSeq = 17, billSeq = 1041;
   // Menu is mutable per api instance (menu management UI edits it).
   const tables: TableInfo[] = structuredClone(MOCK_TABLES);
@@ -159,6 +182,7 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
         const kot: Kot = { id: uid(), orderId, kotNo: `K-${++kotSeq}`, status: "PENDING", station: station ?? null, itemIds: orderItemIds, createdAt: now() };
         for (const l of o.items) if (orderItemIds.includes(l.id)) l.kotId = kot.id;
         o.kots.push(kot); o.version++;
+        deductForKot(kot.id, o, orderItemIds);
         emitKot(kot, o);
         return structuredClone(kot);
       },
@@ -325,6 +349,47 @@ export function createMockApi(opts: { latencyMs?: number } = {}): PosApi {
         const brackets: TaxReport["brackets"] = [...byRate.entries()].sort((a, b) => a[0] - b[0]).map(([taxRateBps, r]) => ({ taxRateBps, ...r, tax: r.cgst + r.sgst }));
         const totals = brackets.reduce((s, b) => ({ taxable: s.taxable + b.taxable, cgst: s.cgst + b.cgst, sgst: s.sgst + b.sgst, tax: s.tax + b.tax }), { taxable: 0, cgst: 0, sgst: 0, tax: 0 });
         return { outletId: MOCK_OUTLET.id, from, to, brackets, totals };
+      },
+    },
+    inventory: {
+      async list(lowStockOnly) {
+        await wait(latency / 2);
+        const items = [...inventoryItems.values()].filter((i) => i.isActive).sort((a, b) => a.name.localeCompare(b.name));
+        return structuredClone(lowStockOnly ? items.filter((i) => i.stockMilli <= i.lowStockMilli) : items);
+      },
+      async create(input: InventoryItemInput) {
+        await wait(latency);
+        if ([...inventoryItems.values()].some((i) => i.name === input.name && i.isActive)) throw new Error(`Inventory item '${input.name}' already exists (409)`);
+        const i: InventoryItem = { id: `inv-${invSeq++}`, name: input.name, unit: input.unit, stockMilli: input.stockMilli ?? 0, lowStockMilli: input.lowStockMilli ?? 0, isActive: true };
+        inventoryItems.set(i.id, i);
+        return structuredClone(i);
+      },
+      async update(id, input) {
+        await wait(latency);
+        const i = inventoryItems.get(id); if (!i) throw new Error("Inventory item not found");
+        Object.assign(i, input);
+        return structuredClone(i);
+      },
+      async adjust(id, input) {
+        await wait(latency);
+        const i = inventoryItems.get(id); if (!i) throw new Error("Inventory item not found");
+        if (!input.qtyMilli) throw new Error("qtyMilli must be non-zero (400)");
+        i.stockMilli += input.qtyMilli;
+        return structuredClone(move(id, input.qtyMilli > 0 ? "RECEIVE" : "ADJUST", input.qtyMilli, i.stockMilli, input.reason));
+      },
+      async movements(id) {
+        await wait(latency / 2);
+        return structuredClone(stockMovements.filter((m) => m.inventoryItemId === id).slice().reverse());
+      },
+      async recipe(menuItemId) {
+        await wait(latency / 2);
+        return structuredClone(recipeLines.get(menuItemId) ?? []);
+      },
+      async setRecipe(menuItemId, lines) {
+        await wait(latency);
+        const next: RecipeLine[] = lines.map((l) => ({ id: `rl-${recipeSeq++}`, menuItemId, inventoryItemId: l.inventoryItemId, qtyMilli: l.qtyMilli, inventoryItem: inventoryItems.get(l.inventoryItemId) ? { id: l.inventoryItemId, name: inventoryItems.get(l.inventoryItemId)!.name, unit: inventoryItems.get(l.inventoryItemId)!.unit } : undefined }));
+        recipeLines.set(menuItemId, next);
+        return structuredClone(next);
       },
     },
   };

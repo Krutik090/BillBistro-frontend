@@ -1,5 +1,7 @@
 // Domain types mirroring prisma/schema.prisma + apps/api (phase1-backend) response shapes. Money = integer paise.
 export type Money = number;
+/** Stock quantity, integer milli-units (1 unit = 1000) — same "no floats" convention as Money. */
+export type Milli = number;
 
 export interface MenuCategory { id: string; name: string; description?: string | null; sortOrder: number; isActive: boolean; scheduleId?: string | null }
 export interface MenuVariant { id: string; itemId?: string; name: string; priceDelta: Money; isDefault?: boolean; isAvailable?: boolean; sortOrder?: number }
@@ -87,6 +89,13 @@ export interface ItemInput {
 }
 
 export interface Outlet { id: string; code: string; name: string; address?: string | null; phone?: string | null; isActive: boolean }
+
+/** T-107 basic inventory. */
+export interface InventoryItem { id: string; name: string; unit: string; stockMilli: Milli; lowStockMilli: Milli; isActive: boolean }
+export interface InventoryItemInput { name: string; unit: string; stockMilli?: Milli; lowStockMilli?: Milli }
+export type StockMovementType = "RECEIVE" | "ADJUST" | "DEDUCT";
+export interface StockMovement { id: string; inventoryItemId?: string; type: StockMovementType; qtyMilli: Milli; balanceMilli: Milli; reason?: string | null; kotId?: string | null; createdAt: string }
+export interface RecipeLine { id: string; menuItemId: string; inventoryItemId: string; qtyMilli: Milli; inventoryItem?: { id: string; name: string; unit: string } }
 export interface LoginInput { tenantSlug: string; email: string; password: string }
 /** Self-serve onboarding (T-106): provisions a tenant + owner + first outlet, then auto-logs in. */
 export interface SignupInput { tenantName: string; tenantSlug: string; ownerName: string; email: string; password: string; outletName?: string }
@@ -158,5 +167,16 @@ export interface PosApi {
     sales(from: string, to: string): Promise<SalesReport>;
     items(from: string, to: string): Promise<ItemSalesReport>;
     tax(from: string, to: string): Promise<TaxReport>;
+  };
+  inventory: {
+    list(lowStockOnly?: boolean): Promise<InventoryItem[]>;
+    create(input: InventoryItemInput): Promise<InventoryItem>;
+    update(id: string, input: Partial<InventoryItemInput>): Promise<InventoryItem>;
+    /** Records a stock movement (positive = receive, negative = waste/correction) and updates the balance. */
+    adjust(id: string, input: { qtyMilli: Milli; reason: string }): Promise<StockMovement>;
+    movements(id: string): Promise<StockMovement[]>;
+    recipe(menuItemId: string): Promise<RecipeLine[]>;
+    /** Full replace of the recipe for one menu item. */
+    setRecipe(menuItemId: string, lines: { inventoryItemId: string; qtyMilli: Milli }[]): Promise<RecipeLine[]>;
   };
 }
