@@ -1,0 +1,19 @@
+# Keeps host-built artifacts (Windows/host-arch node_modules, stale dist/.next, .git history) out of
+# the build context — without this, `COPY . .` after `RUN pnpm install` can overwrite the image's
+# correctly installed node_modules with the host's, breaking native bindings. Turbo's build pipeline
+# regenerates dist/ (design tokens, etc.) inside the container regardless, so excluding it is safe.
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.next/
+**/.next/
+.turbo/
+**/.turbo/
+.git/
+*.log
+.env
+.env.*
+!.env.example
+coverage/
+*.tsbuildinfo
